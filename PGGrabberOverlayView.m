@@ -350,16 +350,14 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     CGFloat statusHeight = 27.0 * scale;
     CGFloat closeSize = 25.0 * scale;
     self.closeButton.frame = CGRectMake(MAX(pad, width - pad - closeSize), top, closeSize, closeSize);
-
-    // Four compact status fields fit within a 430pt iPhone 14 Pro Max card;
-    // labels shrink gracefully on narrower edge windows.
     CGFloat rightEdge = CGRectGetMinX(self.closeButton.frame) - 5.0 * scale;
     CGFloat statusWidth = MAX(0.0, rightEdge - pad);
-    CGFloat timeWidth = MIN(64.0 * scale, statusWidth * 0.26);
-    CGFloat remain = MAX(0.0, statusWidth - timeWidth);
-    CGFloat batteryWidth = remain * 0.29;
-    CGFloat temperatureWidth = remain * 0.34;
-    CGFloat cpuWidth = MAX(0.0, remain - batteryWidth - temperatureWidth);
+
+    // Give every status item a useful minimum before shrinking on compact screens.
+    CGFloat timeWidth = MIN(68.0 * scale, statusWidth * 0.21);
+    CGFloat batteryWidth = MIN(90.0 * scale, statusWidth * 0.24);
+    CGFloat temperatureWidth = MIN(78.0 * scale, statusWidth * 0.22);
+    CGFloat cpuWidth = MAX(0.0, statusWidth - timeWidth - batteryWidth - temperatureWidth);
     self.timeLabel.frame = CGRectMake(pad, top, timeWidth, statusHeight);
     CGFloat cursor = pad + timeWidth;
     self.batteryLabel.frame = CGRectMake(cursor, top, batteryWidth, statusHeight);

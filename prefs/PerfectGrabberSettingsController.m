@@ -68,7 +68,7 @@ static void PGWriteValue(NSString *key, id value) {
                     forKey:PSFooterTextGroupKey];
     [items addObject:sizeGroup];
     NSArray<NSDictionary *> *sizeOptions = @[
-        @{@"name":@"卡片宽度", @"key":@"CardWidth", @"value":@720.0, @"min":@300.0, @"max":@900.0},
+        @{@"name":@"卡片宽度", @"key":@"CardWidth", @"value":@1000.0, @"min":@300.0, @"max":@1400.0},
         @{@"name":@"卡片缩放", @"key":@"CardScale", @"value":@1.0, @"min":@0.7, @"max":@1.6},
         @{@"name":@"字体大小", @"key":@"FontSize", @"value":@15.0, @"min":@9.0, @"max":@24.0}
     ];

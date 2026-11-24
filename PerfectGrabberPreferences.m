@@ -62,7 +62,7 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
     self.fontStyle = MAX(0, MIN(2, [[self valueForKey:@"FontStyle" fallback:@0] integerValue]));
     self.textColor = [PerfectGrabberPreferences colorFromHexString:[self valueForKey:@"TextColor" fallback:@"#FFFFFF"]
                                                            fallback:UIColor.whiteColor];
-    self.cardWidth = MAX(300.0, MIN(900.0, [[self valueForKey:@"CardWidth" fallback:@720.0] doubleValue]));
+    self.cardWidth = MAX(300.0, MIN(1400.0, [[self valueForKey:@"CardWidth" fallback:@1000.0] doubleValue]));
     self.cardScale = MAX(0.7, MIN(1.6, [[self valueForKey:@"CardScale" fallback:@1.0] doubleValue]));
     self.cardBlur = MAX(0.0, MIN(1.0, [[self valueForKey:@"CardBlur" fallback:@0.82] doubleValue]));
     self.cardOpacity = MAX(0.05, MIN(1.0, [[self valueForKey:@"CardOpacity" fallback:@0.78] doubleValue]));
