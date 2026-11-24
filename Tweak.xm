@@ -213,7 +213,9 @@ static void PGShowHUD(id grabber) {
 
 - (void)_willDismiss {
     NSNumber *guard = objc_getAssociatedObject(self, PGLongPressDismissGuardKey);
-    if (guard && CACurrentMediaTime() < guard.doubleValue) {
+    BOOL holdInProgress = guard && guard.doubleValue < 0.0;
+    BOOL fingerUpGrace = guard && guard.doubleValue >= 0.0 && CACurrentMediaTime() < guard.doubleValue;
+    if (holdInProgress || fingerUpGrace) {
         // Some iOS builds collapse the tongue as soon as the touch ends even after
         // the parent tap recognizer has been deferred. Keep it alive for the panel.
         PGHideChevron(self);
