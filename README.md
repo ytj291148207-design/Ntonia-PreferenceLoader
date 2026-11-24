@@ -1,13 +1,11 @@
 # Ntonia-PreferenceLoader
 
-PerfectGrabber jailbreak tweak source.
+PerfectGrabber jailbreak tweak source. GitHub Actions builds rootless and RootHide packages on a native macOS runner with Apple clang/linker.
 
-## Build
-
-The repository uses GitHub Actions on macOS and the native Apple/Clang linker. Push to `main` or manually run **Build DEB** to produce rootless and RootHide packages.
-
-The workflow verifies that both the tweak and its Preferences bundle contain native `arm64` and `arm64e` slices before publishing the artifacts. The iOS deployment target is 15.0.
+The workflow verifies the tweak and Preferences bundle each contain native arm64 and arm64e slices before uploading artifacts.
 
 ## Pull-down card
 
-Shows time, battery percentage/charging state, battery temperature and current media artwork/title. Long-pressing the card opens the existing playback controls panel. Lyrics integration and configurable blur/opacity controls are not included yet.
+The pull-down card shows time, battery level/charging state, battery temperature, media artwork/title and current status. Long-pressing the card opens the playback panel, which docks to the top safe edge instead of floating in the center. Lyrics integration and configurable blur/opacity controls are not implemented yet.
+
+Minimum deployment target: iOS 15.0.

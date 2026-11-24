@@ -95,6 +95,7 @@ jobs:
             lipo -info "$PREFS"
             otool -L "$TWEAK"
             otool -D "$TWEAK"
+          } 2>&1 | tee -a dist/build.log
 
       - name: Build roothide flavour
         run: |

@@ -2351,8 +2351,8 @@ static CFTimeInterval PGFrontmostStartedAt(void) {
     if (spaceWidth <= 0.0 || spaceHeight <= 0.0) return;
 
     if (self.panelFromPullDown) {
-        self.panel.transform = CGAffineTransformIdentity;
-        self.panel.center = CGPointMake(spaceWidth / 2.0, spaceHeight / 2.0);
+        // 下拉卡片唤出的控制面板吸附在屏幕上沿，不悬浮在画面中央。
+        [self placePanelInSpace:space];
         return;
     }
 
@@ -2434,8 +2434,13 @@ static CFTimeInterval PGFrontmostStartedAt(void) {
     if (spaceWidth <= 0.0 || spaceHeight <= 0.0) return;
 
     BOOL landscapeSpace = spaceWidth > spaceHeight;
-    // 用户视角的"宽度"：横屏坐标系是 spaceWidth，竖屏坐标系是 spaceHeight。
-    CGFloat visualWidth = landscapeSpace ? spaceWidth : spaceHeight;
+    // 普通游戏面板跟随胶囊方向；下拉长按面板保持横向并吸附到顶部安全区。
+    CGFloat safeTop = self.window.safeAreaInsets.top;
+    CGFloat safeLeft = self.window.safeAreaInsets.left;
+    CGFloat safeRight = self.window.safeAreaInsets.right;
+    CGFloat visualWidth = self.panelFromPullDown
+        ? MAX(120.0, spaceWidth - safeLeft - safeRight)
+        : (landscapeSpace ? spaceWidth : spaceHeight);
     // 面板宽度 = 设计稿 156 × 倍数；屏幕特别窄时按可用宽度收。
     // 倍数优先取双指捏合中的临时值（跟手），否则读设置里那个滑块的值。
     CGFloat scale = self.livePanelScale > 0.0 ? self.livePanelScale : PGPanelScaleValue();
@@ -2446,6 +2451,13 @@ static CFTimeInterval PGFrontmostStartedAt(void) {
 
     self.panel.transform = CGAffineTransformIdentity;
     self.panel.bounds = CGRectMake(0.0, 0.0, panelWidth, panelHeight);
+
+    if (self.panelFromPullDown) {
+        CGFloat top = MAX(safeTop, PGLandscapeBarEdgeInset);
+        self.panel.center = CGPointMake(safeLeft + (spaceWidth - safeLeft - safeRight) / 2.0,
+                                        top + panelHeight / 2.0);
+        return;
+    }
 
     if (landscapeSpace) {
         CGFloat barBottom = self.bar ? CGRectGetMaxY(self.bar.frame) : barThickness;
