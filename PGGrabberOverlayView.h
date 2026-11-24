@@ -1,32 +1,34 @@
 #import <UIKit/UIKit.h>
 
+NS_ASSUME_NONNULL_BEGIN
+
+/// Docked media/status card. The host owns its edge-attached UIWindow and is
+/// responsible for resizing/repositioning that window when the card height changes.
 @interface PGGrabberOverlayView : UIView
+
+/// Scales the card's internal geometry and preferred width/height (clamped to 0.65–1.50).
+@property (nonatomic, assign) CGFloat cardScale;
+/// Visual-effect strength, 0.0–1.0. This changes the blur view's alpha.
+@property (nonatomic, assign) CGFloat blurAmount;
+/// Dark tint opacity over the blur, 0.0–1.0.
+@property (nonatomic, assign) CGFloat backgroundOpacity;
+/// Corner radius in points at cardScale == 1.0; it scales with cardScale.
+@property (nonatomic, assign) CGFloat cornerRadius;
+
+@property (nonatomic, assign, readonly, getter=isExpanded) BOOL expanded;
+
+/// Called when the close button is tapped. If unset, the card removes itself.
+@property (nonatomic, copy, nullable) void (^onClose)(void);
+/// Called when the preferred height changes (including expansion, scale or width changes).
+@property (nonatomic, copy, nullable) void (^onHeightChange)(CGFloat height);
+
+- (void)setExpanded:(BOOL)expanded animated:(BOOL)animated;
+/// Returns the compact or expanded card height for the supplied width.
+- (CGFloat)heightForWidth:(CGFloat)width;
 - (void)startUpdating;
 - (void)stopUpdating;
 - (void)refreshAppearance;
-/// 按当前内容与字号算出贴合文字的尺寸，供横屏常驻块这类需要自适应宽度的宿主使用。
-- (CGSize)preferredContentSizeForMaxWidth:(CGFloat)maxWidth;
 
-/// 强制单排显示：时间、电量（以及音乐）全部挤在一条线上，忽略「双行显示」偏好。横屏块用。
-@property (nonatomic, assign) BOOL forceSingleLine;
-
-/// 背景色覆盖。非 nil 时优先于偏好里的背景设置（横屏块的自定义色走这里）。
-@property (nonatomic, strong, nullable) UIColor *backgroundOverrideColor;
-
-/// 设置音乐区。visible=NO 时整块收起，胶囊缩回时间电量大小。
-- (void)setMusicVisible:(BOOL)visible title:(nullable NSString *)title
-                 artist:(nullable NSString *)artist playing:(BOOL)playing;
-
-/// 音乐区当前是否展开（横屏块据此决定点按是否弹面板）。
-@property (nonatomic, assign, readonly) BOOL musicVisible;
-
-/// 胶囊内容宽度变化（音乐出现/消失、歌名变长）时回调，宿主据此重排。
-@property (nonatomic, copy, nullable) void (^contentWidthDidChange)(void);
-
-/// 下拉卡片被长按时调用，由宿主弹出原有音乐控制面板。
-@property (nonatomic, copy, nullable) void (^onMusicLongPress)(void);
-/// 长按手势结束/取消时通知宿主，以保护系统的抬手收起回调。
-@property (nonatomic, copy, nullable) void (^onMusicLongPressEnded)(void);
-/// 让宿主上的单击识别器等待本卡片长按失败，避免长按途中先收起下拉卡片。
-- (void)deferAncestorTapRecognizersToAllowLongPress;
 @end
+
+NS_ASSUME_NONNULL_END

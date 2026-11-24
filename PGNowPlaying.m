@@ -3,7 +3,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-/// 日志函数在 PGGrabberLandscapeBar.m 里实现，写到 /var/mobile/Media/PerfectGrabber.log。
+/// 日志统一由插件入口提供。
 extern void PGDebugLog(NSString *format, ...);
 
 #pragma mark - MediaRemote 符号

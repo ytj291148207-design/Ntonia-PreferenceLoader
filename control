@@ -1,8 +1,8 @@
 Package: com.netskao.perfectgrabber
 Name: Ntonia-PreferenceLoader
-Version: 1.1-47
+Version: 1.1-51
 Architecture: iphoneos-arm64
-Description: 下拉卡片整合时间、电量、温度与后台音乐信息；长按卡片显示音乐控制
+Description: 顶部吸附单卡播放器；时间、电量、温度、CPU、封面和曲目信息；长按展开同卡播放控制
 Maintainer: Huayuarc
 Author: NetSkao
 Section: Tweaks

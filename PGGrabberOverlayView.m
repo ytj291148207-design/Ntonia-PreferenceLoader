@@ -1,9 +1,9 @@
 #import "PGGrabberOverlayView.h"
-#import "PerfectGrabberPreferences.h"
 #import "PGHardwareMetrics.h"
 #import "PGNowPlaying.h"
-#import <math.h>
+#import "PerfectGrabberPreferences.h"
 #import <QuartzCore/QuartzCore.h>
+#import <math.h>
 
 @interface SBUIController : NSObject
 + (instancetype)sharedInstance;
@@ -11,696 +11,512 @@
 - (BOOL)isOnAC;
 @end
 
-/// 单排时左右内边距。
-static const CGFloat PGSingleLinePadding = 10.0;
-/// 单排时"时间电量"与音乐区之间的间距（中间夹一条分隔线）。
-static const CGFloat PGSingleLineSectionGap = 7.0;
-/// 音乐标题最多占多宽，超出就截断，避免歌名把胶囊拉得横贯整条屏幕。
-static const CGFloat PGMusicMaxTextWidth = 280.0;
+static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
+    if (!isfinite(value)) return minimum;
+    return MIN(maximum, MAX(minimum, value));
+}
 
-@interface PGGrabberOverlayView ()
+@interface PGGrabberOverlayView () <UIGestureRecognizerDelegate>
+@property (nonatomic, strong) UIVisualEffectView *blurView;
+@property (nonatomic, strong) UIView *tintView;
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) UILabel *batteryLabel;
-/// 单排最左边的"CPU 频率 + 电池温度"，和中间的时间之间也夹一条分隔线。
-@property (nonatomic, strong) UILabel *metricsLabel;
-@property (nonatomic, strong) UIView *metricsDivider;
-@property (nonatomic, strong) UILabel *musicLabel;
-@property (nonatomic, strong) UIImageView *musicArtworkView;
-@property (nonatomic, strong) UIImageView *musicStateView;
-@property (nonatomic, strong) UIView *divider;
-@property (nonatomic, strong) UIVisualEffectView *glassBlurView;
-@property (nonatomic, strong) UIView *glassTintView;
-@property (nonatomic, strong) UIView *glassSheenView;
-@property (nonatomic, strong) CAGradientLayer *glassTintGradient;
-@property (nonatomic, strong) CAGradientLayer *glassSheenGradient;
-@property (nonatomic, strong) UILongPressGestureRecognizer *musicLongPress;
+@property (nonatomic, strong) UILabel *temperatureLabel;
+@property (nonatomic, strong) UILabel *cpuLabel;
+@property (nonatomic, strong) UIButton *closeButton;
+@property (nonatomic, strong) UIImageView *artworkView;
+@property (nonatomic, strong) UILabel *artworkFallbackLabel;
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *artistLabel;
+@property (nonatomic, strong) UILabel *lyricsLabel;
+@property (nonatomic, strong) UIButton *previousButton;
+@property (nonatomic, strong) UIButton *playPauseButton;
+@property (nonatomic, strong) UIButton *nextButton;
+@property (nonatomic, strong) UILongPressGestureRecognizer *cardLongPress;
 @property (nonatomic, strong) NSTimer *timer;
-
-@property (nonatomic, assign) BOOL musicVisible;
-@property (nonatomic, copy) NSString *musicTitle;
-@property (nonatomic, copy) NSString *musicArtist;
 @property (nonatomic, copy) NSData *displayedArtworkData;
-@property (nonatomic, assign) BOOL musicPlaying;
-/// 上次上报给宿主的宽度，用来判断"内容宽度真的变了"。
-@property (nonatomic, assign) CGFloat reportedWidth;
-@property (nonatomic, assign) BOOL reportedMusicVisible;
-/// 防止 "量宽度 → 通知宿主 → 宿主再量宽度" 无限递归。
-@property (nonatomic, assign) BOOL reportingSize;
-@property (nonatomic, assign) BOOL musicLongPressActive;
+@property (nonatomic, assign) BOOL expanded;
+@property (nonatomic, assign) CGFloat currentCardHeight;
+@property (nonatomic, assign) CGFloat lastReportedHeight;
+- (UILabel *)newLabelWithWeight:(UIFontWeight)weight alignment:(NSTextAlignment)alignment;
+- (UIButton *)buttonWithSymbol:(NSString *)symbol fallback:(NSString *)fallback accessibility:(NSString *)accessibility;
+- (CGFloat)heightForCurrentWidth;
+- (void)reportHeightIfNeeded:(BOOL)force;
+- (void)updateContents;
 @end
 
 @implementation PGGrabberOverlayView
 
+@synthesize cardScale = _cardScale;
+@synthesize blurAmount = _blurAmount;
+@synthesize backgroundOpacity = _backgroundOpacity;
+@synthesize cornerRadius = _cornerRadius;
+@synthesize expanded = _expanded;
+@synthesize currentCardHeight = _currentCardHeight;
+
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
-    if (self) {
-        // hitTest opts into touches only while the long-press action is installed.
-        self.userInteractionEnabled = YES;
-        self.clipsToBounds = YES;
-        self.layer.cornerRadius = 10.0;
-        self.layer.cornerCurve = kCACornerCurveContinuous;
-        self.backgroundColor = UIColor.clearColor;
-        self.layer.borderWidth = 1.2 / MAX(UIScreen.mainScreen.scale, 1.0);
-        self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.42].CGColor;
+    if (!self) return nil;
 
-        // 与音乐播放控制面板一致的深色超薄毛玻璃底。
-        UIBlurEffect *glassEffect = nil;
-        if (@available(iOS 13.0, *)) glassEffect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
-        else glassEffect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
-        _glassBlurView = [[UIVisualEffectView alloc] initWithEffect:glassEffect];
-        _glassBlurView.userInteractionEnabled = NO;
-        _glassBlurView.alpha = 0.80;
-        [self addSubview:_glassBlurView];
+    PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
+    _cardScale = PGClamp(preferences.cardScale, 0.65, 1.50);
+    _blurAmount = PGClamp(preferences.cardBlur, 0.0, 1.0);
+    _backgroundOpacity = PGClamp(preferences.cardOpacity, 0.0, 1.0);
+    _cornerRadius = PGClamp(preferences.cardCornerRadius, 0.0, 80.0);
 
-        _glassTintView = [UIView new];
-        _glassTintView.userInteractionEnabled = NO;
-        _glassTintGradient = [CAGradientLayer layer];
-        _glassTintGradient.colors = @[(__bridge id)[UIColor colorWithWhite:0.0 alpha:0.0].CGColor,
-                                      (__bridge id)[UIColor colorWithWhite:0.0 alpha:0.03].CGColor,
-                                      (__bridge id)[UIColor colorWithWhite:0.0 alpha:0.12].CGColor];
-        _glassTintGradient.locations = @[@0.0, @0.55, @1.0];
-        _glassTintGradient.startPoint = CGPointMake(0.5, 0.0);
-        _glassTintGradient.endPoint = CGPointMake(0.5, 1.0);
-        [_glassTintView.layer addSublayer:_glassTintGradient];
-        [self addSubview:_glassTintView];
+    self.backgroundColor = UIColor.clearColor;
+    self.clipsToBounds = YES;
+    self.userInteractionEnabled = YES;
+    self.layer.cornerCurve = kCACornerCurveContinuous;
+    self.layer.borderWidth = 1.0 / MAX(UIScreen.mainScreen.scale, 1.0);
+    self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.22].CGColor;
 
-        _glassSheenView = [UIView new];
-        _glassSheenView.userInteractionEnabled = NO;
-        _glassSheenGradient = [CAGradientLayer layer];
-        _glassSheenGradient.colors = @[(__bridge id)[UIColor colorWithWhite:1.0 alpha:0.20].CGColor,
-                                       (__bridge id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
-                                       (__bridge id)[UIColor colorWithWhite:1.0 alpha:0.0].CGColor];
-        _glassSheenGradient.locations = @[@0.0, @0.35, @1.0];
-        _glassSheenGradient.startPoint = CGPointMake(0.0, 0.0);
-        _glassSheenGradient.endPoint = CGPointMake(0.35, 0.55);
-        [_glassSheenView.layer addSublayer:_glassSheenGradient];
-        [self addSubview:_glassSheenView];
-
-        _timeLabel = [UILabel new];
-        _batteryLabel = [UILabel new];
-        for (UILabel *label in @[_timeLabel, _batteryLabel]) {
-            label.textAlignment = NSTextAlignmentCenter;
-            label.adjustsFontSizeToFitWidth = YES;
-            label.minimumScaleFactor = 0.65;
-            label.numberOfLines = 1;
-            [self addSubview:label];
-        }
-
-        // 左边那截硬件指标：CPU 频率 + 电池温度。
-        _metricsLabel = [UILabel new];
-        _metricsLabel.numberOfLines = 1;
-        _metricsLabel.textAlignment = NSTextAlignmentLeft;
-        _metricsLabel.adjustsFontSizeToFitWidth = YES;
-        _metricsLabel.minimumScaleFactor = 0.7;
-        _metricsLabel.hidden = YES;
-        [self addSubview:_metricsLabel];
-
-        _metricsDivider = [UIView new];
-        _metricsDivider.hidden = YES;
-        [self addSubview:_metricsDivider];
-
-        // Music metadata row; playback controls appear only in the long-press panel.
-        _divider = [UIView new];
-        _divider.hidden = YES;
-        [self addSubview:_divider];
-
-        _musicLabel = [UILabel new];
-        _musicLabel.numberOfLines = 1;
-        _musicLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-        _musicLabel.textAlignment = NSTextAlignmentLeft;
-        _musicLabel.hidden = YES;
-        _musicLabel.userInteractionEnabled = YES;
-        [self addSubview:_musicLabel];
-        _musicLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleMusicLongPress:)];
-        _musicLongPress.minimumPressDuration = 0.35;
-        _musicLongPress.allowableMovement = 14.0;
-        // Attach to the entire card, not just the metadata label. hitTest below
-        // keeps the overlay pass-through whenever no long-press action is installed.
-        _musicLongPress.cancelsTouchesInView = NO;
-        [self addGestureRecognizer:_musicLongPress];
-
-        _musicArtworkView = [UIImageView new];
-        _musicArtworkView.contentMode = UIViewContentModeScaleAspectFill;
-        _musicArtworkView.clipsToBounds = YES;
-        _musicArtworkView.layer.cornerRadius = 5.0;
-        _musicArtworkView.hidden = YES;
-        [self addSubview:_musicArtworkView];
-
-        _musicStateView = [UIImageView new];
-        _musicStateView.contentMode = UIViewContentModeScaleAspectFit;
-        _musicStateView.hidden = YES;
-        [self addSubview:_musicStateView];
+    UIBlurEffect *effect;
+    if (@available(iOS 13.0, *)) {
+        effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterialDark];
+    } else {
+        effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
     }
+    _blurView = [[UIVisualEffectView alloc] initWithEffect:effect];
+    _blurView.userInteractionEnabled = NO;
+    [self addSubview:_blurView];
+
+    _tintView = [UIView new];
+    _tintView.userInteractionEnabled = NO;
+    _tintView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:_backgroundOpacity];
+    [self addSubview:_tintView];
+
+    _timeLabel = [self newLabelWithWeight:UIFontWeightSemibold alignment:NSTextAlignmentLeft];
+    _timeLabel.adjustsFontSizeToFitWidth = YES;
+    _timeLabel.minimumScaleFactor = 0.70;
+    [self addSubview:_timeLabel];
+
+    _batteryLabel = [self newLabelWithWeight:UIFontWeightMedium alignment:NSTextAlignmentCenter];
+    _temperatureLabel = [self newLabelWithWeight:UIFontWeightRegular alignment:NSTextAlignmentCenter];
+    _cpuLabel = [self newLabelWithWeight:UIFontWeightRegular alignment:NSTextAlignmentCenter];
+    for (UILabel *label in @[_batteryLabel, _temperatureLabel, _cpuLabel]) {
+        label.adjustsFontSizeToFitWidth = YES;
+        label.minimumScaleFactor = 0.60;
+        [self addSubview:label];
+    }
+
+    _closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIImage *closeImage = [UIImage systemImageNamed:@"xmark"];
+    if (closeImage) [_closeButton setImage:closeImage forState:UIControlStateNormal];
+    else [_closeButton setTitle:@"×" forState:UIControlStateNormal];
+    _closeButton.accessibilityLabel = @"关闭卡片";
+    _closeButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.12];
+    _closeButton.layer.cornerRadius = 13.0;
+    _closeButton.tintColor = UIColor.whiteColor;
+    [_closeButton addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+    [self addSubview:_closeButton];
+
+    _artworkView = [UIImageView new];
+    _artworkView.contentMode = UIViewContentModeScaleAspectFill;
+    _artworkView.clipsToBounds = YES;
+    _artworkView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.12];
+    [self addSubview:_artworkView];
+    _artworkFallbackLabel = [self newLabelWithWeight:UIFontWeightRegular alignment:NSTextAlignmentCenter];
+    _artworkFallbackLabel.text = @"♫";
+    [self addSubview:_artworkFallbackLabel];
+
+    _titleLabel = [self newLabelWithWeight:UIFontWeightSemibold alignment:NSTextAlignmentLeft];
+    _titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    _titleLabel.text = @"暂无播放内容";
+    [self addSubview:_titleLabel];
+    _artistLabel = [self newLabelWithWeight:UIFontWeightRegular alignment:NSTextAlignmentLeft];
+    _artistLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    _artistLabel.text = @"—";
+    [self addSubview:_artistLabel];
+    _lyricsLabel = [self newLabelWithWeight:UIFontWeightRegular alignment:NSTextAlignmentLeft];
+    _lyricsLabel.textColor = [UIColor colorWithWhite:1.0 alpha:0.66];
+    _lyricsLabel.text = @"暂无歌词";
+    [self addSubview:_lyricsLabel];
+
+    _previousButton = [self buttonWithSymbol:@"backward.end.fill" fallback:@"|◀" accessibility:@"上一首"];
+    [_previousButton addTarget:self action:@selector(previousTapped) forControlEvents:UIControlEventTouchUpInside];
+    _playPauseButton = [self buttonWithSymbol:@"playpause.fill" fallback:@"▶︎/Ⅱ" accessibility:@"播放或暂停"];
+    [_playPauseButton addTarget:self action:@selector(playPauseTapped) forControlEvents:UIControlEventTouchUpInside];
+    _nextButton = [self buttonWithSymbol:@"forward.end.fill" fallback:@"▶|" accessibility:@"下一首"];
+    [_nextButton addTarget:self action:@selector(nextTapped) forControlEvents:UIControlEventTouchUpInside];
+    for (UIButton *button in @[_previousButton, _playPauseButton, _nextButton]) {
+        button.hidden = YES;
+        [self addSubview:button];
+    }
+
+    _cardLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleCardLongPress:)];
+    _cardLongPress.minimumPressDuration = 0.40;
+    _cardLongPress.allowableMovement = 18.0;
+    _cardLongPress.cancelsTouchesInView = NO;
+    _cardLongPress.delegate = self;
+    [self addGestureRecognizer:_cardLongPress];
+
+    [self refreshAppearance];
+    [self updateContents];
+    self.currentCardHeight = [self heightForCurrentWidth];
+    self.lastReportedHeight = self.currentCardHeight;
     return self;
+}
+
+- (UILabel *)newLabelWithWeight:(UIFontWeight)weight alignment:(NSTextAlignment)alignment {
+    UILabel *label = [UILabel new];
+    label.textColor = UIColor.whiteColor;
+    label.font = [UIFont systemFontOfSize:13.0 weight:weight];
+    label.textAlignment = alignment;
+    label.numberOfLines = 1;
+    label.backgroundColor = UIColor.clearColor;
+    return label;
+}
+
+- (UIButton *)buttonWithSymbol:(NSString *)symbol fallback:(NSString *)fallback accessibility:(NSString *)accessibility {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIImage *image = [UIImage systemImageNamed:symbol];
+    if (image) [button setImage:image forState:UIControlStateNormal];
+    else [button setTitle:fallback forState:UIControlStateNormal];
+    button.tintColor = UIColor.whiteColor;
+    button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.13];
+    button.layer.cornerRadius = 18.0;
+    button.accessibilityLabel = accessibility;
+    button.hidden = YES;
+    return button;
 }
 
 - (void)dealloc {
     [_timer invalidate];
 }
 
-- (void)deferAncestorTapRecognizersToAllowLongPress {
-    UIGestureRecognizer *longPress = self.musicLongPress;
-    if (!longPress) return;
-    // SpringBoard's grabber has a tap recognizer that dismisses the whole pull-down.
-    // Make its tap wait until this card's long press either begins or fails; otherwise
-    // the system collapses the card before the playback-panel long press can fire.
-    for (UIView *view = self.superview; view; view = view.superview) {
-        for (UIGestureRecognizer *recognizer in view.gestureRecognizers) {
-            if (recognizer == longPress || ![recognizer isKindOfClass:UITapGestureRecognizer.class]) continue;
-            [recognizer requireGestureRecognizerToFail:longPress];
+#pragma mark - Public configuration
+
+- (CGFloat)cardScale { return _cardScale; }
+- (void)setCardScale:(CGFloat)value {
+    CGFloat next = PGClamp(value, 0.65, 1.50);
+    if (fabs(next - _cardScale) < 0.001) return;
+    _cardScale = next;
+    [self refreshAppearance];
+    CGFloat height = [self heightForCurrentWidth];
+    self.currentCardHeight = height;
+    if (CGRectGetWidth(self.bounds) > 0.0) {
+        CGRect frame = self.frame;
+        frame.size.height = height;
+        self.frame = frame;
+    }
+    [self reportHeightIfNeeded:YES];
+}
+
+- (CGFloat)blurAmount { return _blurAmount; }
+- (void)setBlurAmount:(CGFloat)value {
+    _blurAmount = PGClamp(value, 0.0, 1.0);
+    [self refreshAppearance];
+}
+
+- (CGFloat)backgroundOpacity { return _backgroundOpacity; }
+- (void)setBackgroundOpacity:(CGFloat)value {
+    _backgroundOpacity = PGClamp(value, 0.0, 1.0);
+    [self refreshAppearance];
+}
+
+- (CGFloat)cornerRadius { return _cornerRadius; }
+- (void)setCornerRadius:(CGFloat)value {
+    _cornerRadius = PGClamp(value, 0.0, 80.0);
+    [self setNeedsLayout];
+}
+
+- (BOOL)isExpanded { return _expanded; }
+- (CGFloat)currentCardHeight { return _currentCardHeight; }
+
+- (void)setExpanded:(BOOL)expanded animated:(BOOL)animated {
+    if (_expanded == expanded) return;
+    _expanded = expanded;
+    CGFloat targetHeight = [self heightForCurrentWidth];
+    self.currentCardHeight = targetHeight;
+    self.lastReportedHeight = targetHeight;
+
+    // Notify the window host before animation so it can grow the edge-attached
+    // UIWindow. This view remains a single card; it never creates another window.
+    if (self.onHeightChange) self.onHeightChange(targetHeight);
+
+    void (^layoutBlock)(void) = ^{
+        if (CGRectGetWidth(self.bounds) > 0.0 && CGRectGetHeight(self.bounds) > 0.0) {
+            CGRect frame = self.frame;
+            frame.size.height = targetHeight;
+            self.frame = frame;
         }
+        [self setNeedsLayout];
+        [self layoutIfNeeded];
+    };
+    if (animated) {
+        [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut animations:layoutBlock completion:nil];
+    } else {
+        layoutBlock();
     }
 }
 
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    // Only intercept touches when long-press playback is configured. Outside the card,
-    // SpringBoard gestures remain untouched.
-    if (self.hidden || self.alpha < 0.01 || !self.userInteractionEnabled ||
-        !self.onMusicLongPress) return nil;
-    if (!CGRectContainsPoint(self.bounds, point)) return nil;
-    return self;
+- (CGFloat)heightForWidth:(CGFloat)width {
+    CGFloat scale = PGClamp(self.cardScale, 0.65, 1.50);
+    // Room for a readable status row, a 60pt artwork row, and expanded control buttons.
+    return (112.0 + (self.isExpanded ? 64.0 : 0.0)) * scale;
 }
 
+- (CGFloat)heightForCurrentWidth {
+    return [self heightForWidth:CGRectGetWidth(self.bounds)];
+}
 
-#pragma mark - 外观
+- (void)reportHeightIfNeeded:(BOOL)force {
+    CGFloat height = [self heightForCurrentWidth];
+    self.currentCardHeight = height;
+    if (!force && fabs(height - self.lastReportedHeight) < 0.5) return;
+    self.lastReportedHeight = height;
+    if (self.onHeightChange) self.onHeightChange(height);
+}
 
-- (UIFont *)configuredFont {
+#pragma mark - Appearance and layout
+
+- (UIFont *)configuredFontWithSize:(CGFloat)size weight:(UIFontWeight)weight {
     PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
-    if (preferences.fontStyle == 1) {
-        return [UIFont systemFontOfSize:preferences.fontSize weight:UIFontWeightBold];
-    }
-    UIFont *font = [UIFont systemFontOfSize:preferences.fontSize weight:UIFontWeightRegular];
+    CGFloat requested = (preferences.fontSize > 0.0 ? preferences.fontSize : 13.0) * self.cardScale;
+    UIFontWeight chosenWeight = (preferences.fontStyle == 1) ? UIFontWeightBold : weight;
+    UIFont *font = [UIFont systemFontOfSize:MAX(9.0, MIN(24.0, requested)) weight:chosenWeight];
     if (preferences.fontStyle == 2) {
         UIFontDescriptor *descriptor = [font.fontDescriptor fontDescriptorWithSymbolicTraits:UIFontDescriptorTraitItalic];
-        if (descriptor) font = [UIFont fontWithDescriptor:descriptor size:preferences.fontSize];
+        if (descriptor) font = [UIFont fontWithDescriptor:descriptor size:font.pointSize];
     }
     return font;
 }
 
-- (NSInteger)currentBatteryPercentage {
-    Class controllerClass = NSClassFromString(@"SBUIController");
-    if ([controllerClass respondsToSelector:@selector(sharedInstance)]) {
-        SBUIController *controller = [controllerClass sharedInstance];
-        if ([controller respondsToSelector:@selector(batteryCapacityAsPercentage)]) {
-            return MAX(0, MIN(100, [controller batteryCapacityAsPercentage]));
-        }
+- (void)applyAppearance {
+    [self refreshAppearance];
+}
+
+- (void)refreshAppearance {
+    UIColor *textColor = UIColor.whiteColor;
+    @try {
+        UIColor *preferred = PerfectGrabberPreferences.sharedPreferences.textColor;
+        if (preferred) textColor = preferred;
+    } @catch (__unused NSException *exception) { }
+
+    CGFloat blur = PGClamp(self.blurAmount, 0.0, 1.0);
+    UIBlurEffectStyle style = blur < 0.20 ? UIBlurEffectStyleSystemThinMaterialDark
+                              : (blur < 0.62 ? UIBlurEffectStyleSystemMaterialDark
+                                             : UIBlurEffectStyleSystemChromeMaterialDark);
+    if (@available(iOS 13.0, *)) self.blurView.effect = [UIBlurEffect effectWithStyle:style];
+    self.blurView.alpha = 0.35 + blur * 0.65;
+    UIColor *tint = PerfectGrabberPreferences.sharedPreferences.cardTintColor;
+    CGFloat red = 0.0, green = 0.0, blue = 0.0, tintAlpha = 0.12;
+    if (![tint getRed:&red green:&green blue:&blue alpha:&tintAlpha]) {
+        [tint getWhite:&red alpha:&tintAlpha]; green = red; blue = red;
+    }
+    self.tintView.backgroundColor = [UIColor colorWithRed:red green:green blue:blue
+                                                    alpha:PGClamp(self.backgroundOpacity, 0.0, 1.0)];
+    self.blurView.hidden = NO;
+    self.layer.cornerRadius = MAX(0.0, self.cornerRadius * self.cardScale);
+    self.layer.borderColor = [textColor colorWithAlphaComponent:0.20].CGColor;
+    self.timeLabel.textColor = textColor;
+    self.batteryLabel.textColor = textColor;
+    self.temperatureLabel.textColor = textColor;
+    self.cpuLabel.textColor = textColor;
+    self.titleLabel.textColor = textColor;
+    self.artistLabel.textColor = [textColor colorWithAlphaComponent:0.88];
+    self.lyricsLabel.textColor = [textColor colorWithAlphaComponent:0.64];
+    self.artworkFallbackLabel.textColor = textColor;
+    self.closeButton.tintColor = textColor;
+
+    self.timeLabel.font = [self configuredFontWithSize:14.0 weight:UIFontWeightSemibold];
+    for (UILabel *label in @[_batteryLabel, _temperatureLabel, _cpuLabel]) {
+        label.font = [self configuredFontWithSize:11.0 weight:UIFontWeightMedium];
+    }
+    self.titleLabel.font = [self configuredFontWithSize:15.0 weight:UIFontWeightSemibold];
+    self.artistLabel.font = [self configuredFontWithSize:12.0 weight:UIFontWeightRegular];
+    self.lyricsLabel.font = [self configuredFontWithSize:11.0 weight:UIFontWeightRegular];
+    self.artworkFallbackLabel.font = [UIFont systemFontOfSize:25.0 * self.cardScale weight:UIFontWeightLight];
+    self.closeButton.layer.cornerRadius = 13.0 * self.cardScale;
+    for (UIButton *button in @[_previousButton, _playPauseButton, _nextButton]) {
+        button.tintColor = textColor;
+        button.layer.cornerRadius = 19.0 * self.cardScale;
+    }
+    [self setNeedsLayout];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat width = CGRectGetWidth(self.bounds);
+    CGFloat height = CGRectGetHeight(self.bounds);
+    CGFloat scale = PGClamp(self.cardScale, 0.65, 1.50);
+    self.layer.cornerRadius = MAX(0.0, self.cornerRadius * scale);
+    self.blurView.frame = self.bounds;
+    self.tintView.frame = self.bounds;
+
+    CGFloat pad = 12.0 * scale;
+    CGFloat top = 7.0 * scale;
+    CGFloat statusHeight = 27.0 * scale;
+    CGFloat closeSize = 25.0 * scale;
+    self.closeButton.frame = CGRectMake(MAX(pad, width - pad - closeSize), top, closeSize, closeSize);
+
+    // Four compact status fields fit within a 430pt iPhone 14 Pro Max card;
+    // labels shrink gracefully on narrower edge windows.
+    CGFloat rightEdge = CGRectGetMinX(self.closeButton.frame) - 5.0 * scale;
+    CGFloat statusWidth = MAX(0.0, rightEdge - pad);
+    CGFloat timeWidth = MIN(64.0 * scale, statusWidth * 0.26);
+    CGFloat remain = MAX(0.0, statusWidth - timeWidth);
+    CGFloat batteryWidth = remain * 0.29;
+    CGFloat temperatureWidth = remain * 0.34;
+    CGFloat cpuWidth = MAX(0.0, remain - batteryWidth - temperatureWidth);
+    self.timeLabel.frame = CGRectMake(pad, top, timeWidth, statusHeight);
+    CGFloat cursor = pad + timeWidth;
+    self.batteryLabel.frame = CGRectMake(cursor, top, batteryWidth, statusHeight);
+    cursor += batteryWidth;
+    self.temperatureLabel.frame = CGRectMake(cursor, top, temperatureWidth, statusHeight);
+    cursor += temperatureWidth;
+    self.cpuLabel.frame = CGRectMake(cursor, top, cpuWidth, statusHeight);
+
+    if (self.isExpanded) {
+        CGFloat buttonSize = 38.0 * scale;
+        CGFloat gap = 24.0 * scale;
+        CGFloat controlsWidth = buttonSize * 3.0 + gap * 2.0;
+        CGFloat controlsY = MAX(0.0, height - 47.0 * scale);
+        CGFloat startX = MAX(pad, (width - controlsWidth) / 2.0);
+        self.previousButton.frame = CGRectMake(startX, controlsY, buttonSize, buttonSize);
+        self.playPauseButton.frame = CGRectMake(startX + buttonSize + gap, controlsY, buttonSize, buttonSize);
+        self.nextButton.frame = CGRectMake(startX + (buttonSize + gap) * 2.0, controlsY, buttonSize, buttonSize);
+    } else {
+        self.previousButton.frame = CGRectZero;
+        self.playPauseButton.frame = CGRectZero;
+        self.nextButton.frame = CGRectZero;
     }
 
+    CGFloat mediaTop = top + statusHeight + 5.0 * scale;
+    CGFloat mediaBottom = self.isExpanded ? CGRectGetMinY(self.previousButton.frame) - 4.0 * scale : height - 8.0 * scale;
+    CGFloat mediaHeight = MAX(0.0, mediaBottom - mediaTop);
+    CGFloat artSize = MIN(60.0 * scale, MAX(36.0 * scale, mediaHeight - 2.0 * scale));
+    CGFloat artY = mediaTop + MAX(0.0, (mediaHeight - artSize) / 2.0);
+    self.artworkView.frame = CGRectMake(pad, artY, artSize, artSize);
+    self.artworkView.layer.cornerRadius = 9.0 * scale;
+    self.artworkFallbackLabel.frame = self.artworkView.frame;
+
+    CGFloat textX = CGRectGetMaxX(self.artworkView.frame) + 10.0 * scale;
+    CGFloat textWidth = MAX(0.0, width - pad - textX);
+    CGFloat titleHeight = 19.0 * scale;
+    CGFloat artistHeight = 16.0 * scale;
+    CGFloat lyricsHeight = 15.0 * scale;
+    CGFloat textBlockHeight = titleHeight + artistHeight + lyricsHeight;
+    CGFloat textY = mediaTop + MAX(0.0, (mediaHeight - textBlockHeight) / 2.0);
+    self.titleLabel.frame = CGRectMake(textX, textY, textWidth, titleHeight);
+    self.artistLabel.frame = CGRectMake(textX, textY + titleHeight, textWidth, artistHeight);
+    self.lyricsLabel.frame = CGRectMake(textX, textY + titleHeight + artistHeight, textWidth, lyricsHeight);
+
+    BOOL controlsVisible = self.isExpanded;
+    self.previousButton.hidden = !controlsVisible;
+    self.playPauseButton.hidden = !controlsVisible;
+    self.nextButton.hidden = !controlsVisible;
+    self.titleLabel.hidden = NO;
+    self.artistLabel.hidden = NO;
+    self.lyricsLabel.hidden = NO;
+    [self reportHeightIfNeeded:NO];
+}
+
+#pragma mark - Content updates
+
+- (NSInteger)currentBatteryPercentage {
+    Class cls = NSClassFromString(@"SBUIController");
+    if ([cls respondsToSelector:@selector(sharedInstance)]) {
+        SBUIController *controller = [cls sharedInstance];
+        if ([controller respondsToSelector:@selector(batteryCapacityAsPercentage)]) {
+            NSInteger percent = [controller batteryCapacityAsPercentage];
+            if (percent >= 0 && percent <= 100) return percent;
+        }
+    }
     UIDevice.currentDevice.batteryMonitoringEnabled = YES;
-    CGFloat level = UIDevice.currentDevice.batteryLevel;
-    return level < 0 ? 0 : (NSInteger)lround(level * 100.0);
+    float level = UIDevice.currentDevice.batteryLevel;
+    return level < 0.0 ? 0 : (NSInteger)lroundf(level * 100.0f);
 }
 
 - (BOOL)isCharging {
-    Class controllerClass = NSClassFromString(@"SBUIController");
-    if ([controllerClass respondsToSelector:@selector(sharedInstance)]) {
-        SBUIController *controller = [controllerClass sharedInstance];
+    Class cls = NSClassFromString(@"SBUIController");
+    if ([cls respondsToSelector:@selector(sharedInstance)]) {
+        SBUIController *controller = [cls sharedInstance];
         if ([controller respondsToSelector:@selector(isOnAC)]) return [controller isOnAC];
     }
     UIDeviceBatteryState state = UIDevice.currentDevice.batteryState;
     return state == UIDeviceBatteryStateCharging || state == UIDeviceBatteryStateFull;
 }
 
-- (NSString *)timeText {
-    PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
-    NSDateFormatter *formatter = [NSDateFormatter new];
-    formatter.locale = [NSLocale currentLocale];
-    formatter.dateFormat = preferences.disable24Hour ? @"h:mm a" : @"HH:mm";
-    return [formatter stringFromDate:NSDate.date];
-}
-
-- (NSString *)batteryText {
-    PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
-    NSInteger battery = [self currentBatteryPercentage];
-    NSString *chargingPrefix = preferences.chargingIcon && [self isCharging] ? @"\u26A1 " : @"";
-    return [NSString stringWithFormat:@"%@%ld%%", chargingPrefix, (long)battery];
-}
-
 - (void)updateContents {
-    PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
     PGNowPlaying *nowPlaying = PGNowPlaying.sharedInstance;
+    NSDateFormatter *formatter = [NSDateFormatter new];
+    formatter.locale = NSLocale.currentLocale;
+    formatter.dateFormat = PerfectGrabberPreferences.sharedPreferences.disable24Hour ? @"h:mm a" : @"HH:mm";
+    self.timeLabel.text = [formatter stringFromDate:NSDate.date] ?: @"--:--";
+
+    NSString *batteryIcon = [self isCharging] ? @"⚡" : @"▰";
+    self.batteryLabel.text = [NSString stringWithFormat:@"%@ %ld%%", batteryIcon, (long)[self currentBatteryPercentage]];
+
+    double temperature = PGBatteryTemperatureCelsius();
+    self.temperatureLabel.text = isfinite(temperature) ? [NSString stringWithFormat:@"♨ %.0f°", temperature] : @"♨ —";
+    double cpu = PGCPUUsagePercent();
+    self.cpuLabel.text = isfinite(cpu) ? [NSString stringWithFormat:@"CPU %.0f%%", cpu] : @"CPU —";
+
+    BOOL musicPlaying = nowPlaying.isPlaying;
+    NSString *title = nowPlaying.title;
+    NSString *artist = nowPlaying.artist;
     NSData *artworkData = nowPlaying.artworkData;
-    if ((artworkData != self.displayedArtworkData) && ![artworkData isEqualToData:self.displayedArtworkData]) {
+    // Save the last valid track so the idle card still has artwork/metadata after playback stops.
+    if (artworkData.length && ![artworkData isEqualToData:self.displayedArtworkData]) {
         self.displayedArtworkData = [artworkData copy];
-        self.musicArtworkView.image = artworkData.length ? [UIImage imageWithData:artworkData] : nil;
+        self.artworkView.image = [UIImage imageWithData:artworkData];
     }
-    NSString *time = [self timeText];
-    NSString *battery = [self batteryText];
+    self.titleLabel.text = title.length ? title : (nowPlaying.isPlaying ? @"正在播放" : @"未播放");
+    self.artistLabel.text = artist.length ? artist : @"—";
+    self.lyricsLabel.text = @"暂无歌词";
+    self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
 
-    NSString *playingApp = nowPlaying.bundleIdentifier;
-    NSString *frontApp = nowPlaying.frontmostBundleIdentifier;
-    BOOL inBackground = playingApp.length == 0 || frontApp.length == 0 ||
-                        ![playingApp isEqualToString:frontApp];
-    BOOL hasMusicText = nowPlaying.title.length > 0 || nowPlaying.artist.length > 0;
-    BOOL hasMusicMetadata = hasMusicText || artworkData.length > 0;
-    // Keep one unified music row for available metadata; stopped playback shows a neutral placeholder.
-    BOOL showMusic = preferences.landscapeMusic && (hasMusicMetadata || !nowPlaying.isPlaying);
-    BOOL playingInBackground = nowPlaying.isPlaying && hasMusicText && inBackground;
-    [self setMusicVisible:showMusic
-                    title:(playingInBackground ? nowPlaying.title : nil)
-                   artist:(playingInBackground ? nowPlaying.artist : nil)
-                  playing:nowPlaying.isPlaying];
-    if (showMusic && !playingInBackground) {
-        self.musicLabel.text = nowPlaying.isPlaying ? @"正在播放" : @"未播放";
-    }
-
-    // The pull-down card uses its first row for time and battery health, not CPU.
-    if (!self.forceSingleLine) {
-        double celsius = PGBatteryTemperatureCelsius();
-        self.metricsLabel.text = isnan(celsius) ? nil : [NSString stringWithFormat:@"♨ %.1f°C", celsius];
-        self.metricsLabel.hidden = self.metricsLabel.text.length == 0;
+    if (musicPlaying) {
+        UIImage *pause = [UIImage systemImageNamed:@"pause.fill"];
+        if (pause) [self.playPauseButton setImage:pause forState:UIControlStateNormal];
+        else [self.playPauseButton setTitle:@"Ⅱ" forState:UIControlStateNormal];
     } else {
-        [self updateMetricsText];
+        UIImage *play = [UIImage systemImageNamed:@"play.fill"];
+        if (play) [self.playPauseButton setImage:play forState:UIControlStateNormal];
+        else [self.playPauseButton setTitle:@"▶︎" forState:UIControlStateNormal];
     }
-    if (self.forceSingleLine || self.musicVisible || !preferences.twoLine) {
-        self.timeLabel.text = [NSString stringWithFormat:@"%@  %@", time, battery];
-        self.batteryLabel.text = nil;
-        self.batteryLabel.hidden = YES;
-    } else {
-        self.timeLabel.text = time;
-        self.batteryLabel.text = battery;
-        self.batteryLabel.hidden = NO;
-    }
-    [self applyAppearance];
     [self setNeedsLayout];
-    [self reportWidthIfNeeded];
 }
 
-- (void)handleMusicLongPress:(UILongPressGestureRecognizer *)recognizer {
-    switch (recognizer.state) {
-        case UIGestureRecognizerStateBegan:
-            self.musicLongPressActive = YES;
-            if (self.onMusicLongPress) self.onMusicLongPress();
-            break;
-        case UIGestureRecognizerStateEnded:
-        case UIGestureRecognizerStateCancelled:
-        case UIGestureRecognizerStateFailed:
-            if (self.musicLongPressActive) {
-                self.musicLongPressActive = NO;
-                if (self.onMusicLongPressEnded) self.onMusicLongPressEnded();
-            }
-            break;
-        default:
-            break;
+#pragma mark - Gestures and controls
+
+- (void)handleCardLongPress:(UILongPressGestureRecognizer *)recognizer {
+    if (recognizer.state == UIGestureRecognizerStateBegan) {
+        [self setExpanded:!self.isExpanded animated:YES];
     }
 }
 
-- (void)updateMetricsText {
-    PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
-    if (self.forceSingleLine && !preferences.landscapeMetrics) {
-        self.metricsLabel.text = nil;
-        self.metricsLabel.hidden = YES;
-        return;
-    }
-
-    NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    if (!self.forceSingleLine || preferences.landscapeMetricsUsage) {
-        // 下拉卡片固定显示 CPU 使用率；横屏常驻条仍尊重原来的频率/占用率设置。
-        double usage = PGCPUUsagePercent();
-        if (!isnan(usage)) {
-            [parts addObject:[NSString stringWithFormat:@"CPU %2.0f%%", usage]];
-        }
-    } else {
-        double gigahertz = PGCPUCurrentFrequencyGHz();
-        if (gigahertz > 0.0) {
-            if (gigahertz >= 1.0) {
-                [parts addObject:[NSString stringWithFormat:@"%.2fGHz", gigahertz]];
-            } else {
-                [parts addObject:[NSString stringWithFormat:@"%.0fMHz", gigahertz * 1000.0]];
-            }
-        }
-    }
-    double celsius = PGBatteryTemperatureCelsius();
-    if (!isnan(celsius)) {
-        [parts addObject:[NSString stringWithFormat:@"%.1f\u00B0C", celsius]];
-    }
-
-    self.metricsLabel.text = parts.count ? [parts componentsJoinedByString:@" "] : nil;
-    self.metricsLabel.hidden = parts.count == 0;
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    // Keep button taps responsive while the card-wide hold recognizer is installed.
+    return NO;
 }
 
-- (void)applyAppearance {
-    PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
-    UIFont *font = [self configuredFont];
-    UIColor *textColor = preferences.textColor;
-
-    for (UILabel *label in @[self.timeLabel, self.batteryLabel]) {
-        label.font = font;
-        label.textColor = textColor;
-        label.numberOfLines = 1;
-    }
-    self.musicLabel.font = font;
-    self.musicLabel.textColor = [textColor colorWithAlphaComponent:0.95];
-    self.metricsLabel.font = font;
-    self.metricsLabel.textColor = [textColor colorWithAlphaComponent:0.92];
-    if (@available(iOS 13.0, *)) {
-        self.musicStateView.tintColor = textColor;
-    }
-    self.divider.backgroundColor = [textColor colorWithAlphaComponent:0.30];
-    self.metricsDivider.backgroundColor = [textColor colorWithAlphaComponent:0.30];
-
-    if (self.forceSingleLine) {
-        self.glassBlurView.hidden = YES;
-        self.glassTintView.hidden = YES;
-        self.glassSheenView.hidden = YES;
-        UIColor *background = self.backgroundOverrideColor;
-        if (!background) background = preferences.backgroundColorEnabled ? preferences.backgroundColor : UIColor.clearColor;
-        self.backgroundColor = background;
-    } else {
-        self.glassBlurView.hidden = NO;
-        self.glassTintView.hidden = NO;
-        self.glassSheenView.hidden = NO;
-        self.backgroundColor = UIColor.clearColor;
-        self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.42].CGColor;
-    }
-    // 有背景色就四角都圆；透明时圆角也保留（子类会按自己的半径覆盖），避免切换时跳变。
-    self.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
-                               kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+- (void)closeTapped {
+    [self stopUpdating];
+    if (self.onClose) self.onClose();
+    else [self removeFromSuperview];
 }
 
-- (void)refreshAppearance {
-    [self applyAppearance];
-    [self setNeedsLayout];
-    [self updateContents];
-}
+- (void)previousTapped { [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandPrevious]; }
+- (void)playPauseTapped { [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandTogglePlayPause]; }
+- (void)nextTapped { [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandNext]; }
 
-#pragma mark - 音乐区
-
-- (void)setMusicVisible:(BOOL)visible title:(NSString *)title
-                 artist:(NSString *)artist playing:(BOOL)playing {
-    NSString *newTitle = title ?: @"";
-    NSString *newArtist = artist ?: @"";
-    BOOL changed = visible != self.musicVisible ||
-                   playing != self.musicPlaying ||
-                   ![newTitle isEqualToString:(self.musicTitle ?: @"")] ||
-                   ![newArtist isEqualToString:(self.musicArtist ?: @"")];
-    if (!changed) return;
-
-    self.musicVisible = visible;
-    self.musicPlaying = playing;
-    self.musicTitle = newTitle;
-    self.musicArtist = newArtist;
-
-    if (visible) {
-        NSString *composed = nil;
-        if (self.musicTitle.length && self.musicArtist.length) {
-            composed = [NSString stringWithFormat:@"\u266A %@ \u00B7 %@", self.musicTitle, self.musicArtist];
-        } else if (self.musicTitle.length) {
-            composed = [NSString stringWithFormat:@"\u266A %@", self.musicTitle];
-        } else if (self.musicArtist.length) {
-            composed = [NSString stringWithFormat:@"\u266A %@", self.musicArtist];
-        } else {
-            composed = @"\u266A 正在播放";
-        }
-        self.musicLabel.text = composed;
-        // Playback controls live only in the long-press modal panel.
-        self.musicStateView.image = nil;
-    } else {
-        self.musicLabel.text = nil;
-        self.musicStateView.image = nil;
-    }
-
-    self.musicLabel.hidden = !visible;
-    self.musicArtworkView.hidden = !visible || self.musicArtworkView.image == nil;
-    self.musicStateView.hidden = !visible;
-    self.divider.hidden = !visible;
-    // 字体/颜色必须先就位再量宽度，否则首次量到的是系统默认字号。
-    [self applyAppearance];
-    [self setNeedsLayout];
-    [self reportWidthIfNeeded];
-}
-
-- (CGFloat)musicIntrinsicWidth {
-    if (!self.musicVisible || self.musicLabel.text.length == 0) return 0.0;
-    CGSize size = [self.musicLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-    return MIN(ceil(size.width), PGMusicMaxTextWidth);
-}
-
-/// 内容宽度变化时通知宿主重排（胶囊会跟着歌名变宽变窄）。
-- (void)reportWidthIfNeeded {
-    if (self.reportingSize) return;
-    CGFloat width = [self intrinsicWidth];
-    if (fabs(width - self.reportedWidth) < 1.0 && self.reportedMusicVisible == self.musicVisible) return;
-    self.reportedWidth = width;
-    self.reportedMusicVisible = self.musicVisible;
-    if (!self.contentWidthDidChange) return;
-    self.reportingSize = YES;
-    self.contentWidthDidChange();
-    self.reportingSize = NO;
-}
-
-/// 不含 maxWidth 限制的"贴合内容"宽度。
-- (CGFloat)intrinsicWidth {
-    if (self.forceSingleLine) {
-        CGFloat width = 2.0 * PGSingleLinePadding;
-        if (self.metricsLabel.text.length > 0 && !self.metricsLabel.hidden) {
-            // 指标文字 + 分隔线两侧间距
-            CGSize metricsSize = [self.metricsLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-            width += ceil(metricsSize.width) + PGSingleLineSectionGap + 1.0 + PGSingleLineSectionGap;
-        }
-        CGSize timeSize = [self.timeLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-        width += ceil(timeSize.width);
-        if (self.musicVisible) {
-            // Divider spacing plus the music text only; controls are in the long-press panel.
-            width += PGSingleLineSectionGap + 1.0 + PGSingleLineSectionGap;
-            width += [self musicIntrinsicWidth];
-        }
-        return width;
-    }
-
-    CGFloat firstRowWidth = 0.0;
-    if (self.timeLabel.text.length > 0) {
-        firstRowWidth = ceil([self.timeLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)].width);
-    }
-    if (self.metricsLabel.text.length > 0 && !self.metricsLabel.hidden) {
-        firstRowWidth += 17.0 + ceil([self.metricsLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)].width);
-    }
-    if (!self.musicVisible && !self.batteryLabel.hidden && self.batteryLabel.text.length > 0) {
-        firstRowWidth = MAX(firstRowWidth, ceil([self.batteryLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)].width));
-    }
-    CGFloat secondRowWidth = 0.0;
-    if (self.musicVisible) {
-        secondRowWidth = [self musicIntrinsicWidth] + 8.0;
-        if (self.musicArtworkView.image) secondRowWidth += 35.0;
-    }
-    return MAX(firstRowWidth, secondRowWidth) + 20.0;
-}
-
-#pragma mark - 布局
-
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    if (self.forceSingleLine) {
-        [self layoutSingleLine];
-        return;
-    }
-
-    PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
-    CGFloat width = CGRectGetWidth(self.bounds);
-    CGFloat height = CGRectGetHeight(self.bounds);
-    CGFloat pad = 10.0;
-    // The card is one unified two-row layout when music metadata is present.
-    CGFloat rowHeight = height / (self.musicVisible || preferences.twoLine ? 2.0 : 1.0);
-    CGFloat scale = MAX(UIScreen.mainScreen.scale, 1.0);
-    CGFloat lineHeight = MIN(14.0, rowHeight - 4.0);
-
-    self.glassBlurView.frame = self.bounds;
-    self.glassTintView.frame = self.bounds;
-    self.glassSheenView.frame = self.bounds;
-    self.glassTintGradient.frame = self.glassTintView.bounds;
-    self.glassSheenGradient.frame = self.glassSheenView.bounds;
-    self.divider.hidden = YES;
-    self.metricsDivider.hidden = YES;
-    self.musicLabel.hidden = !self.musicVisible;
-    self.musicStateView.hidden = YES;
-
-    CGFloat firstRowBottom = rowHeight;
-    CGFloat right = width - pad;
-    BOOL hasMetrics = self.metricsLabel.text.length > 0;
-    self.metricsLabel.hidden = !hasMetrics;
-    self.metricsDivider.hidden = !hasMetrics;
-
-    // First row: time/battery and temperature; second row: cover plus available song metadata.
-
-    // 播放控制仍由整卡长按弹出，不在卡片内常驻显示。
-    CGSize timeSize = [self.timeLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, rowHeight)];
-    CGFloat timeWidth = MIN(ceil(timeSize.width), MAX(0.0, right - pad));
-    self.timeLabel.textAlignment = hasMetrics ? NSTextAlignmentLeft : NSTextAlignmentCenter;
-
-    if (hasMetrics) {
-        CGSize metricsSize = [self.metricsLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, rowHeight)];
-        CGFloat metricsWidth = MIN(ceil(metricsSize.width), MAX(0.0, right - pad));
-        CGFloat available = MAX(0.0, width - 2.0 * pad - 17.0);
-        if (timeWidth + metricsWidth > available) {
-            CGFloat total = MAX(1.0, timeWidth + metricsWidth);
-            CGFloat ratio = available / total;
-            timeWidth = floor(timeWidth * ratio);
-            metricsWidth = MAX(0.0, available - timeWidth);
-        }
-        self.timeLabel.frame = CGRectMake(pad, 0.0, timeWidth, firstRowBottom);
-        CGFloat dividerX = pad + timeWidth + 8.0;
-        self.metricsDivider.frame = CGRectMake(dividerX, (firstRowBottom - lineHeight) / 2.0, 1.0 / scale, lineHeight);
-        CGFloat metricsX = dividerX + 9.0;
-        self.metricsLabel.textAlignment = NSTextAlignmentRight;
-        self.metricsLabel.frame = CGRectMake(metricsX, 0.0, MAX(0.0, right - metricsX), firstRowBottom);
-    } else {
-        self.metricsLabel.frame = CGRectZero;
-        self.metricsDivider.frame = CGRectZero;
-        self.timeLabel.frame = CGRectMake(pad, 0.0, MAX(0.0, width - 2.0 * pad), firstRowBottom);
-    }
-
-    if (self.musicVisible) {
-        self.batteryLabel.hidden = YES;
-        self.batteryLabel.frame = CGRectZero;
-        self.musicStateView.frame = CGRectZero;
-        self.musicStateView.hidden = YES;
-        CGFloat musicLeft = pad;
-        if (self.musicArtworkView.image) {
-            CGFloat artworkSize = MIN(36.0, MAX(18.0, rowHeight - 6.0));
-            self.musicArtworkView.hidden = NO;
-            self.musicArtworkView.frame = CGRectMake(musicLeft, rowHeight + (rowHeight - artworkSize) / 2.0, artworkSize, artworkSize);
-            musicLeft += artworkSize + 8.0;
-        } else {
-            self.musicArtworkView.hidden = YES;
-            self.musicArtworkView.frame = CGRectZero;
-        }
-        self.musicLabel.frame = CGRectMake(musicLeft, rowHeight, MAX(0.0, right - musicLeft), rowHeight);
-    } else {
-        self.musicLabel.frame = CGRectZero;
-        self.musicStateView.frame = CGRectZero;
-        if (preferences.twoLine) {
-            self.batteryLabel.textAlignment = NSTextAlignmentCenter;
-            self.batteryLabel.frame = CGRectMake(pad, rowHeight, width - 2.0 * pad, height - rowHeight);
-        } else {
-            self.batteryLabel.frame = CGRectZero;
-            self.batteryLabel.hidden = YES;
-        }
-    }
-}
-
-/// Unified music metadata row; playback actions are available in the long-press panel.
-- (void)layoutSingleLine {
-    self.glassBlurView.frame = self.bounds;
-    self.glassTintView.frame = self.bounds;
-    self.glassSheenView.frame = self.bounds;
-    self.glassTintGradient.frame = self.glassTintView.bounds;
-    self.glassSheenGradient.frame = self.glassSheenView.bounds;
-    CGFloat height = CGRectGetHeight(self.bounds);
-    CGFloat width = CGRectGetWidth(self.bounds);
-    CGFloat pad = PGSingleLinePadding;
-    CGFloat scale = MAX(UIScreen.mainScreen.scale, 1.0);
-    CGFloat lineHeight = MIN(14.0, height - 6.0);
-    CGFloat contentRight = width - pad;
-
-    self.batteryLabel.frame = CGRectZero;
-    self.batteryLabel.hidden = YES;
-
-    // 第一段：CPU 频率 + 电池温度（没内容就整段让位给时间）。
-    CGFloat cursor = pad;
-    if (self.metricsLabel.text.length > 0 && !self.metricsLabel.hidden) {
-        self.metricsLabel.hidden = NO;
-        CGSize metricsSize = [self.metricsLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, height)];
-        CGFloat metricsWidth = MIN(ceil(metricsSize.width), MAX(0.0, contentRight - pad));
-        self.metricsLabel.frame = CGRectMake(cursor, 0.0, metricsWidth, height);
-        cursor += metricsWidth + PGSingleLineSectionGap;
-        self.metricsDivider.hidden = NO;
-        self.metricsDivider.frame = CGRectMake(cursor, (height - lineHeight) / 2.0, 1.0 / scale, lineHeight);
-        cursor += 1.0 + PGSingleLineSectionGap;
-    } else {
-        self.metricsLabel.frame = CGRectZero;
-        self.metricsDivider.hidden = YES;
-        self.metricsDivider.frame = CGRectZero;
-    }
-
-    if (!self.musicVisible) {
-        // 没有音乐时，时间在剩下的空间里居中（有指标时是"指标右边的剩余空间"）。
-        self.timeLabel.textAlignment = NSTextAlignmentCenter;
-        self.timeLabel.frame = CGRectMake(cursor, 0.0, MAX(0.0, contentRight - cursor), height);
-        self.musicLabel.frame = CGRectZero;
-        self.musicStateView.frame = CGRectZero;
-        self.divider.frame = CGRectZero;
-        return;
-    }
-
-    CGSize timeSize = [self.timeLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, height)];
-    CGFloat timeWidth = MIN(ceil(timeSize.width), MAX(0.0, contentRight - cursor));
-    self.timeLabel.textAlignment = NSTextAlignmentLeft;
-    self.timeLabel.frame = CGRectMake(cursor, 0.0, timeWidth, height);
-
-    cursor += timeWidth + PGSingleLineSectionGap;
-    self.divider.frame = CGRectMake(cursor, (height - lineHeight) / 2.0, 1.0 / scale, lineHeight);
-
-    cursor += 1.0 + PGSingleLineSectionGap;
-    CGFloat musicWidth = MAX(0.0, contentRight - cursor);
-    self.musicLabel.frame = CGRectMake(cursor, 0.0, musicWidth, height);
-    self.musicStateView.frame = CGRectZero;
-    self.musicStateView.hidden = YES;
-}
-
-#pragma mark - 尺寸
-
-- (CGSize)preferredContentSizeForMaxWidth:(CGFloat)maxWidth {
-    // 先刷新一次内容，否则宿主首次排版时标签还是空的，量出来的宽度不可用。
-    [self updateContents];
-    UIFont *font = [self configuredFont];
-
-    if (self.forceSingleLine) {
-        CGSize timeSize = [self.timeLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-        CGFloat width = MIN([self intrinsicWidth], MAX(44.0, maxWidth));
-        CGFloat height = MAX(ceil(MAX(timeSize.height, font.lineHeight)) + 12.0, 22.0);
-        return CGSizeMake(width, height);
-    }
-
-    CGFloat textWidth = 0.0;
-    CGFloat textHeight = 0.0;
-    CGSize timeSize = [self.timeLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-    textWidth = MAX(textWidth, timeSize.width);
-    textHeight = MAX(textHeight, timeSize.height);
-    if (self.metricsLabel.text.length > 0 && !self.metricsLabel.hidden) {
-        CGSize metricsSize = [self.metricsLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-        textWidth += 17.0 + metricsSize.width;
-    }
-    if (!self.musicVisible && !self.batteryLabel.hidden && self.batteryLabel.text.length > 0) {
-        CGSize batterySize = [self.batteryLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-        textWidth = MAX(textWidth, batterySize.width);
-        textHeight += batterySize.height;
-    }
-    if (self.musicVisible) {
-        CGSize musicSize = [self.musicLabel sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-        textWidth = MAX(textWidth, musicSize.width + 22.0);
-        textHeight = MAX(textHeight, timeSize.height) + MAX(musicSize.height, font.lineHeight);
-    }
-    if (textHeight <= 0.0) {
-        textWidth = font.pointSize * 6.0;
-        textHeight = font.lineHeight;
-    }
-
-    // Left/right padding is 10pt; the optional second row contains only actual media metadata.
-    CGFloat width = ceil(textWidth) + 20.0;
-    CGFloat height = ceil(textHeight) + 8.0;
-    return CGSizeMake(MIN(width, MAX(44.0, maxWidth)), MAX(height, 20.0));
-}
-
-#pragma mark - 刷新
+#pragma mark - Monitoring
 
 - (void)startUpdating {
     [self stopUpdating];
     [PGNowPlaying.sharedInstance startMonitoring];
     [self refreshAppearance];
     [self updateContents];
-    self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0
-                                                  target:self
-                                                selector:@selector(updateContents)
-                                                userInfo:nil
-                                                 repeats:YES];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateContents) userInfo:nil repeats:YES];
 }
 
 - (void)stopUpdating {
     [self.timer invalidate];
     self.timer = nil;
-    if (!PerfectGrabberPreferences.sharedPreferences.landscapeAlwaysOn) {
-        [PGNowPlaying.sharedInstance stopMonitoring];
-    }
+    [PGNowPlaying.sharedInstance stopMonitoring];
 }
 
 @end

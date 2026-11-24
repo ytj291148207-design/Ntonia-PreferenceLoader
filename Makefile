@@ -6,14 +6,14 @@ INSTALL_TARGET_PROCESSES = SpringBoard Preferences
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = PerfectGrabber
-PerfectGrabber_FILES = Tweak.xm PerfectGrabberPreferences.m PGGrabberOverlayView.m PGGrabberHUDView.m PGGrabberLandscapeBar.m PGNowPlaying.m PGHardwareMetrics.m
+PerfectGrabber_FILES = Tweak.xm PerfectGrabberPreferences.m PGGrabberOverlayView.m PGNowPlaying.m PGHardwareMetrics.m
 PerfectGrabber_CFLAGS = -fobjc-arc
 # MediaRemote 走 dlopen/dlsym 运行时加载，不写进 FRAMEWORKS（SDK 里没有它的 stub）。
-# IOKit 用来读电池温度与 pmgr 的频率表。
-PerfectGrabber_FRAMEWORKS = Foundation UIKit AudioToolbox CoreMotion IOKit
+# IOKit 提供电池温度；方向显示依赖系统下拉手势，不再读取重力。
+PerfectGrabber_FRAMEWORKS = Foundation UIKit AudioToolbox IOKit
 
 BUNDLE_NAME = PerfectGrabberSettings
-PerfectGrabberSettings_FILES = prefs/PerfectGrabberSettingsController.m prefs/PGAppSelectionController.m
+PerfectGrabberSettings_FILES = prefs/PerfectGrabberSettingsController.m
 PerfectGrabberSettings_INSTALL_PATH = /Library/PreferenceBundles
 PerfectGrabberSettings_FRAMEWORKS = Foundation UIKit
 # -fno-autolink 必须有：#import <Preferences/PSListController.h> 会让 clang modules 自动
