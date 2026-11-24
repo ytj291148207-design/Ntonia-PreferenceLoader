@@ -1,0 +1,134 @@
+name: Build DEB
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'dist/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    env:
+      THEOS: /Users/runner/theos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare
+        run: |
+          mkdir -p dist
+          : > dist/build.log
+          chmod +x roothide-repack.sh
+          ls -l
+
+      - name: Install Theos
+        run: |
+          if [ ! -f "$HOME/theos/makefiles/common.mk" ]; then
+            rm -rf "$HOME/theos"
+            git clone --depth 1 --recursive https://github.com/theos/theos.git "$HOME/theos"
+          fi
+
+      - name: Install ldid
+        run: |
+          if [ ! -x "$HOME/theos/bin/ldid" ]; then
+            mkdir -p "$HOME/theos/bin"
+            if [ "$(uname -m)" = "arm64" ]; then A=ldid_macosx_arm64; else A=ldid_macosx_x86_64; fi
+            curl -fsSL --retry 3 --retry-delay 3 "https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/$A" -o "$HOME/theos/bin/ldid"
+            chmod +x "$HOME/theos/bin/ldid"
+          fi
+
+      - name: Fetch iOS 16.5 SDK
+        run: |
+          mkdir -p "$HOME/theos/sdks"
+          cd "$HOME/theos/sdks"
+          if [ -d "iPhoneOS16.5.sdk" ]; then echo "sdk already present"; exit 0; fi
+          URL=""
+          # 依次尝试：已知 tag、latest release API、遍历近若干 release
+          for tag in master master-146e41f; do
+            C="https://github.com/theos/sdks/releases/download/$tag/iPhoneOS16.5.sdk.tar.xz"
+            if curl -fsIL --retry 2 -m 30 "$C" >/dev/null 2>&1; then URL="$C"; break; fi
+          done
+          if [ -z "$URL" ]; then
+            URL="$(curl -fsSL -m 60 https://api.github.com/repos/theos/sdks/releases/latest \
+              | grep -o 'https://[^"]*iPhoneOS16\.5\.sdk\.tar\.xz' | head -n 1 || true)"
+          fi
+          if [ -z "$URL" ]; then
+            echo "!! 未能定位 iPhoneOS16.5.sdk 下载地址"; curl -fsSL https://api.github.com/repos/theos/sdks/releases/latest | head -40 || true; exit 1
+          fi
+          echo "SDK URL: $URL"
+          curl -fsSL --retry 3 --retry-delay 5 -o sdk.tar.xz "$URL"
+          tar -xf sdk.tar.xz && rm -f sdk.tar.xz
+          ls -d *.sdk
+
+      - name: Install packaging tools
+        run: |
+          brew install dpkg xz || true
+          which dpkg-deb
+
+      - name: Build rootless
+        run: |
+          set -o pipefail
+          export PATH="$HOME/theos/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export THEOS="$HOME/theos"
+          {
+            make clean || true
+            make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1 DEBUG=0
+            echo "--- packages ---"
+            ls -l packages
+            DEB="$(ls packages/*.deb | head -n 1)"
+            cp "$DEB" "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_rootless.deb"
+            echo "--- control ---"
+            dpkg-deb -I "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_rootless.deb"
+            echo "--- contents ---"
+            dpkg-deb -c "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_rootless.deb"
+            echo "--- verify native arm64 + arm64e outputs ---"
+            TWEAK=".theos/obj/PerfectGrabber.dylib"
+            PREFS=".theos/obj/PerfectGrabberSettings.bundle/PerfectGrabberSettings"
+            test -f "$TWEAK" || { echo "Missing $TWEAK"; exit 1; }
+            test -f "$PREFS" || { echo "Missing $PREFS"; exit 1; }
+            lipo -verify_arch arm64 arm64e "$TWEAK"
+            lipo -verify_arch arm64 arm64e "$PREFS"
+            lipo -info "$TWEAK"
+            lipo -info "$PREFS"
+            otool -L "$TWEAK"
+            otool -D "$TWEAK"
+
+      - name: Build roothide flavour
+        run: |
+          set -o pipefail
+          export PATH="$HOME/theos/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export THEOS="$HOME/theos"
+          {
+            ./roothide-repack.sh "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_rootless.deb" \
+                                 "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_roothide.deb"
+            echo "--- roothide control ---"
+            dpkg-deb -I "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_roothide.deb"
+            echo "--- roothide contents ---"
+            dpkg-deb -c "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_roothide.deb"
+            echo "--- verify RootHide package metadata and architectures ---"
+            dpkg-deb -f "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_roothide.deb" Architecture Version
+            mkdir -p /tmp/verify-roothide
+            dpkg-deb -x "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_roothide.deb" /tmp/verify-roothide
+            lipo -verify_arch arm64 arm64e /tmp/verify-roothide/Library/MobileSubstrate/DynamicLibraries/PerfectGrabber.dylib
+            lipo -verify_arch arm64 arm64e /tmp/verify-roothide/Library/PreferenceBundles/PerfectGrabberSettings.bundle/PerfectGrabberSettings
+            ls -l dist
+          } 2>&1 | tee -a dist/build.log
+
+      - name: Publish results
+        if: always()
+        run: |
+          {
+            echo "=== job status: ${{ job.status }} ==="
+            shasum -a 256 dist/*.deb 2>/dev/null || echo "no deb produced"
+          } 2>&1 | tee -a dist/build.log
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debs
+          path: dist/*
+          if-no-files-found: warn
