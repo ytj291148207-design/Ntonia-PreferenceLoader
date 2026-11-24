@@ -89,8 +89,8 @@ jobs:
             PREFS=".theos/obj/PerfectGrabberSettings.bundle/PerfectGrabberSettings"
             test -f "$TWEAK" || { echo "Missing $TWEAK"; exit 1; }
             test -f "$PREFS" || { echo "Missing $PREFS"; exit 1; }
-            lipo -verify_arch arm64 arm64e "$TWEAK"
-            lipo -verify_arch arm64 arm64e "$PREFS"
+            lipo "$TWEAK" -verify_arch arm64 arm64e
+            lipo "$PREFS" -verify_arch arm64 arm64e
             lipo -info "$TWEAK"
             lipo -info "$PREFS"
             otool -L "$TWEAK"
@@ -113,8 +113,8 @@ jobs:
             dpkg-deb -f "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_roothide.deb" Architecture Version
             mkdir -p /tmp/verify-roothide
             dpkg-deb -x "dist/Ntonia-PreferenceLoader_${GITHUB_RUN_NUMBER}_roothide.deb" /tmp/verify-roothide
-            lipo -verify_arch arm64 arm64e /tmp/verify-roothide/Library/MobileSubstrate/DynamicLibraries/PerfectGrabber.dylib
-            lipo -verify_arch arm64 arm64e /tmp/verify-roothide/Library/PreferenceBundles/PerfectGrabberSettings.bundle/PerfectGrabberSettings
+            lipo /tmp/verify-roothide/Library/MobileSubstrate/DynamicLibraries/PerfectGrabber.dylib -verify_arch arm64 arm64e
+            lipo /tmp/verify-roothide/Library/PreferenceBundles/PerfectGrabberSettings.bundle/PerfectGrabberSettings -verify_arch arm64 arm64e
             ls -l dist
           } 2>&1 | tee -a dist/build.log
 
