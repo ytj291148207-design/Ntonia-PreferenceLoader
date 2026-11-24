@@ -132,12 +132,16 @@ static void PGShowOverlay(id grabber) {
     overlay.onMusicLongPress = ^{
         id strongGrabber = weakGrabber;
         if (!strongGrabber) return;
-        CFTimeInterval expiry = CACurrentMediaTime() + 1.0;
-        objc_setAssociatedObject(strongGrabber, PGLongPressDismissGuardKey, @(expiry), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // Keep dismissal suppressed for the whole hold, regardless of how long it lasts.
+        objc_setAssociatedObject(strongGrabber, PGLongPressDismissGuardKey, @(-1.0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [PGLandscapeBar.sharedBar showControlPanelForPullDown];
     };
     overlay.onMusicLongPressEnded = ^{
-        // Retain the guard through the finger-up event; old/stale dismiss events expire automatically.
+        id strongGrabber = weakGrabber;
+        if (!strongGrabber) return;
+        // Let SpringBoard's delayed finger-up dismissal finish before releasing the guard.
+        CFTimeInterval expiry = CACurrentMediaTime() + 1.5;
+        objc_setAssociatedObject(strongGrabber, PGLongPressDismissGuardKey, @(expiry), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     };
     [overlay deferAncestorTapRecognizersToAllowLongPress];
     [overlay startUpdating];
