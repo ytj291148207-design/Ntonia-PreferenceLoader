@@ -23,6 +23,10 @@
 /// 胶囊内容宽度变化（音乐出现/消失、歌名变长）时回调，宿主据此重排。
 @property (nonatomic, copy, nullable) void (^contentWidthDidChange)(void);
 
-/// 下拉卡片歌词被长按时调用，由宿主弹出原有音乐控制面板。
+/// 下拉卡片被长按时调用，由宿主弹出原有音乐控制面板。
 @property (nonatomic, copy, nullable) void (^onMusicLongPress)(void);
+/// 长按手势结束/取消时通知宿主，以保护系统的抬手收起回调。
+@property (nonatomic, copy, nullable) void (^onMusicLongPressEnded)(void);
+/// 让宿主上的单击识别器等待本卡片长按失败，避免长按途中先收起下拉卡片。
+- (void)deferAncestorTapRecognizersToAllowLongPress;
 @end

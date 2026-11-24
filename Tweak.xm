@@ -9,6 +9,7 @@
 
 static const void *PGOverlayAssociationKey = &PGOverlayAssociationKey;
 static const void *PGHUDAssociationKey = &PGHUDAssociationKey;
+static const void *PGLongPressDismissGuardKey = &PGLongPressDismissGuardKey;
 static __weak id PGActiveOverlayGrabber;
 static __weak id PGActiveHUDGrabber;
 
@@ -127,9 +128,18 @@ static void PGShowOverlay(id grabber) {
     overlay.hidden = NO;
     overlay.alpha = 1.0;
     overlay.userInteractionEnabled = YES;
+    __weak id weakGrabber = grabber;
     overlay.onMusicLongPress = ^{
+        id strongGrabber = weakGrabber;
+        if (!strongGrabber) return;
+        CFTimeInterval expiry = CACurrentMediaTime() + 1.0;
+        objc_setAssociatedObject(strongGrabber, PGLongPressDismissGuardKey, @(expiry), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [PGLandscapeBar.sharedBar showControlPanelForPullDown];
     };
+    overlay.onMusicLongPressEnded = ^{
+        // Retain the guard through the finger-up event; old/stale dismiss events expire automatically.
+    };
+    [overlay deferAncestorTapRecognizersToAllowLongPress];
     [overlay startUpdating];
     if (preferences.vibrationFeedback) AudioServicesPlaySystemSound(1519);
 }
@@ -198,6 +208,14 @@ static void PGShowHUD(id grabber) {
 }
 
 - (void)_willDismiss {
+    NSNumber *guard = objc_getAssociatedObject(self, PGLongPressDismissGuardKey);
+    if (guard && CACurrentMediaTime() < guard.doubleValue) {
+        // Some iOS builds collapse the tongue as soon as the touch ends even after
+        // the parent tap recognizer has been deferred. Keep it alive for the panel.
+        PGHideChevron(self);
+        return;
+    }
+    objc_setAssociatedObject(self, PGLongPressDismissGuardKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     BOOL handled = PGOverlayForGrabber(self, NO) != nil;
     if (handled) {
         PGHideChevron(self);

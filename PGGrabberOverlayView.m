@@ -46,6 +46,7 @@ static const CGFloat PGMusicMaxTextWidth = 280.0;
 @property (nonatomic, assign) BOOL reportedMusicVisible;
 /// 防止 "量宽度 → 通知宿主 → 宿主再量宽度" 无限递归。
 @property (nonatomic, assign) BOOL reportingSize;
+@property (nonatomic, assign) BOOL musicLongPressActive;
 @end
 
 @implementation PGGrabberOverlayView
@@ -157,9 +158,23 @@ static const CGFloat PGMusicMaxTextWidth = 280.0;
     [_timer invalidate];
 }
 
+- (void)deferAncestorTapRecognizersToAllowLongPress {
+    UIGestureRecognizer *longPress = self.musicLongPress;
+    if (!longPress) return;
+    // SpringBoard's grabber has a tap recognizer that dismisses the whole pull-down.
+    // Make its tap wait until this card's long press either begins or fails; otherwise
+    // the system collapses the card before the playback-panel long press can fire.
+    for (UIView *view = self.superview; view; view = view.superview) {
+        for (UIGestureRecognizer *recognizer in view.gestureRecognizers) {
+            if (recognizer == longPress || ![recognizer isKindOfClass:UITapGestureRecognizer.class]) continue;
+            [recognizer requireGestureRecognizerToFail:longPress];
+        }
+    }
+}
+
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    // 仅在长按回调有效时整张下拉卡片参与命中；否则所有区域继续穿透。
-    // 这样保留 SpringBoard 原手势，不会因为透明覆盖层拦截其它触摸。
+    // Only intercept touches when long-press playback is configured. Outside the card,
+    // SpringBoard gestures remain untouched.
     if (self.hidden || self.alpha < 0.01 || !self.userInteractionEnabled ||
         !self.onMusicLongPress) return nil;
     if (!CGRectContainsPoint(self.bounds, point)) return nil;
@@ -272,8 +287,22 @@ static const CGFloat PGMusicMaxTextWidth = 280.0;
 }
 
 - (void)handleMusicLongPress:(UILongPressGestureRecognizer *)recognizer {
-    if (recognizer.state != UIGestureRecognizerStateBegan) return;
-    if (self.onMusicLongPress) self.onMusicLongPress();
+    switch (recognizer.state) {
+        case UIGestureRecognizerStateBegan:
+            self.musicLongPressActive = YES;
+            if (self.onMusicLongPress) self.onMusicLongPress();
+            break;
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed:
+            if (self.musicLongPressActive) {
+                self.musicLongPressActive = NO;
+                if (self.onMusicLongPressEnded) self.onMusicLongPressEnded();
+            }
+            break;
+        default:
+            break;
+    }
 }
 
 - (void)updateMetricsText {
