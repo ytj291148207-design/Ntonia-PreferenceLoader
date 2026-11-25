@@ -2,8 +2,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// Docked media/status card. The host owns its edge-attached UIWindow and is
-/// responsible for resizing/repositioning that window when the card height changes.
+/// Edge-docked media/status card. The SpringBoard host manages its position and size.
 @interface PGGrabberOverlayView : UIView
 
 /// Scales the card's internal geometry and preferred width/height (clamped to 0.65–1.50).

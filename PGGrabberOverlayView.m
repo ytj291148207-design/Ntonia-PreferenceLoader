@@ -36,7 +36,9 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, copy) NSData *displayedArtworkData;
 @property (nonatomic, assign) BOOL expanded;
-@property (nonatomic, assign) CGFloat currentCardHeight;
+@property (nonatomic, assign) BOOL hasPendingPlaybackState;
+@property (nonatomic, assign) BOOL pendingPlaybackState;
+@property (nonatomic, strong) NSDate *pendingPlaybackDeadline;
 - (UILabel *)newLabelWithWeight:(UIFontWeight)weight alignment:(NSTextAlignment)alignment;
 - (UIButton *)buttonWithSymbol:(NSString *)symbol fallback:(NSString *)fallback accessibility:(NSString *)accessibility;
 - (void)updateContents;
@@ -214,7 +216,6 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     if (_expanded == expanded) return;
     _expanded = expanded;
     CGFloat targetHeight = [self heightForCurrentWidth];
-    self.currentCardHeight = targetHeight;
     if (self.onHeightChange) self.onHeightChange(targetHeight);
 
     void (^layoutBlock)(void) = ^{
@@ -268,13 +269,9 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
                                              : UIBlurEffectStyleSystemChromeMaterialDark);
     if (@available(iOS 13.0, *)) self.blurView.effect = [UIBlurEffect effectWithStyle:style];
     self.blurView.alpha = 0.35 + blur * 0.65;
-    UIColor *tint = PerfectGrabberPreferences.sharedPreferences.cardTintColor;
-    CGFloat red = 0.0, green = 0.0, blue = 0.0, tintAlpha = 0.12;
-    if (![tint getRed:&red green:&green blue:&blue alpha:&tintAlpha]) {
-        [tint getWhite:&red alpha:&tintAlpha]; green = red; blue = red;
-    }
-    self.tintView.backgroundColor = [UIColor colorWithRed:red green:green blue:blue
-                                                    alpha:PGClamp(self.backgroundOpacity, 0.0, 1.0)];
+    // Keep one predictable dark tint; only the opacity slider controls its strength.
+    self.tintView.backgroundColor = [UIColor colorWithWhite:0.0
+                                                      alpha:PGClamp(self.backgroundOpacity, 0.0, 1.0)];
     self.blurView.hidden = NO;
     self.layer.cornerRadius = MAX(0.0, self.cornerRadius * self.cardScale);
     self.layer.borderColor = [textColor colorWithAlphaComponent:0.20].CGColor;
@@ -411,7 +408,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     formatter.dateFormat = PerfectGrabberPreferences.sharedPreferences.disable24Hour ? @"h:mm a" : @"HH:mm";
     self.timeLabel.text = [formatter stringFromDate:NSDate.date] ?: @"--:--";
 
-    NSString *batteryIcon = [self isCharging] ? @"⚡" : @"▰";
+    PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
+    NSString *batteryIcon = (preferences.chargingIcon && [self isCharging]) ? @"⚡" : @"▰";
     self.batteryLabel.text = [NSString stringWithFormat:@"%@ %ld%%", batteryIcon, (long)[self currentBatteryPercentage]];
 
     double temperature = PGBatteryTemperatureCelsius();
@@ -419,7 +417,6 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     double cpu = PGCPUUsagePercent();
     self.cpuLabel.text = isfinite(cpu) ? [NSString stringWithFormat:@"CPU %.0f%%", cpu] : @"CPU —";
 
-    BOOL musicPlaying = nowPlaying.isPlaying;
     NSString *title = nowPlaying.title;
     NSString *artist = nowPlaying.artist;
     NSData *artworkData = nowPlaying.artworkData;
@@ -428,12 +425,21 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         self.displayedArtworkData = [artworkData copy];
         self.artworkView.image = [UIImage imageWithData:artworkData];
     }
-    self.titleLabel.text = title.length ? title : (nowPlaying.isPlaying ? @"正在播放" : @"未播放");
+    BOOL remotePlaying = nowPlaying.isPlaying;
+    BOOL showPlaying = remotePlaying;
+    if (self.hasPendingPlaybackState) {
+        if (remotePlaying == self.pendingPlaybackState || [self.pendingPlaybackDeadline timeIntervalSinceNow] <= 0.0) {
+            self.hasPendingPlaybackState = NO;
+        } else {
+            showPlaying = self.pendingPlaybackState;
+        }
+    }
+    self.titleLabel.text = title.length ? title : (showPlaying ? @"正在播放" : @"未播放");
     self.artistLabel.text = artist.length ? artist : @"—";
     self.lyricsLabel.text = @"暂无歌词";
     self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
 
-    if (musicPlaying) {
+    if (showPlaying) {
         UIImage *pause = [UIImage systemImageNamed:@"pause.fill"];
         if (pause) [self.playPauseButton setImage:pause forState:UIControlStateNormal];
         else [self.playPauseButton setTitle:@"Ⅱ" forState:UIControlStateNormal];
@@ -465,7 +471,20 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 }
 
 - (void)previousTapped { [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandPrevious]; }
-- (void)playPauseTapped { [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandTogglePlayPause]; }
+
+- (void)playPauseTapped {
+    BOOL currentlyPlaying = self.hasPendingPlaybackState ? self.pendingPlaybackState : PGNowPlaying.sharedInstance.isPlaying;
+    self.pendingPlaybackState = !currentlyPlaying;
+    self.hasPendingPlaybackState = YES;
+    self.pendingPlaybackDeadline = [NSDate dateWithTimeIntervalSinceNow:2.5];
+    UIImage *image = [UIImage systemImageNamed:self.pendingPlaybackState ? @"pause.fill" : @"play.fill"];
+    if (image) [self.playPauseButton setImage:image forState:UIControlStateNormal];
+    else [self.playPauseButton setTitle:(self.pendingPlaybackState ? @"Ⅱ" : @"▶︎") forState:UIControlStateNormal];
+    self.titleLabel.text = self.pendingPlaybackState ? @"正在播放" : @"已暂停";
+    [self setNeedsLayout];
+    [PGNowPlaying.sharedInstance sendCommand:self.pendingPlaybackState ? PGMediaCommandPlay : PGMediaCommandPause];
+}
+
 - (void)nextTapped { [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandNext]; }
 
 #pragma mark - Monitoring

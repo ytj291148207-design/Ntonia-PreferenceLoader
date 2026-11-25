@@ -55,7 +55,7 @@ static void PGWriteValue(NSString *key, id value) {
     if (_specifiers) return _specifiers;
     NSMutableArray *items = [NSMutableArray array];
     PSSpecifier *main = [PSSpecifier groupSpecifierWithName:@"顶部播放器卡片"];
-    [main setProperty:@"从顶部下拉触发，系统面板收起后卡片仍贴在安全区上沿。长按同卡展开可点击的上一首、播放/暂停、下一首；再长按收回。歌词不联网，无系统歌词时显示“暂无歌词”。"
+    [main setProperty:@"从顶部下拉触发。卡片固定吸附在屏幕顶部中央标记位置，不可拖动；下拉面板收起后仍贴边显示。长按展开上一首、播放/暂停、下一首控制，再长按收回。系统未提供歌词时显示“暂无歌词”。"
                 forKey:PSFooterTextGroupKey];
     [items addObject:main];
     [items addObject:[self preferenceNamed:@"启用卡片" key:@"EnabledPerfectGrabber" defaultValue:@NO cell:PSSwitchCell]];
@@ -63,16 +63,18 @@ static void PGWriteValue(NSString *key, id value) {
     [items addObject:[self preferenceNamed:@"使用12小时制" key:@"Disable24H" defaultValue:@NO cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"显示充电图标" key:@"ChargingIcon" defaultValue:@YES cell:PSSwitchCell]];
 
-    PSSpecifier *sizeGroup = [PSSpecifier groupSpecifierWithName:@"卡片尺寸"];
-    [sizeGroup setProperty:@"宽度会按屏幕可用范围限制；缩放调整卡片内容大小。"
-                    forKey:PSFooterTextGroupKey];
-    [items addObject:sizeGroup];
-    NSArray<NSDictionary *> *sizeOptions = @[
-        @{@"name":@"卡片宽度", @"key":@"CardWidth", @"value":@1000.0, @"min":@300.0, @"max":@1400.0},
-        @{@"name":@"卡片缩放", @"key":@"CardScale", @"value":@1.0, @"min":@0.7, @"max":@1.6},
-        @{@"name":@"字体大小", @"key":@"FontSize", @"value":@15.0, @"min":@9.0, @"max":@24.0}
+    NSArray<NSDictionary *> *sliderOptions = @[
+        @{@"name":@"卡片宽度", @"key":@"CardWidth", @"value":@460.0, @"min":@300.0, @"max":@800.0, @"help":@"调整顶部卡片横向宽度；超出屏幕时自动限制在安全范围内。"},
+        @{@"name":@"卡片缩放", @"key":@"CardScale", @"value":@1.0, @"min":@0.7, @"max":@1.6, @"help":@"同步调整卡片内容、图标和高度。"},
+        @{@"name":@"字体大小", @"key":@"FontSize", @"value":@15.0, @"min":@9.0, @"max":@24.0, @"help":@"调整时间、状态和歌曲信息的文字大小。"},
+        @{@"name":@"毛玻璃强度", @"key":@"CardBlur", @"value":@0.82, @"min":@0.0, @"max":@1.0, @"help":@"调整卡片背后模糊效果的强弱；数值越大越明显。"},
+        @{@"name":@"背景透明度", @"key":@"CardOpacity", @"value":@0.78, @"min":@0.05, @"max":@1.0, @"help":@"调整卡片深色叠底的不透明程度；数值越大底色越实。"},
+        @{@"name":@"卡片圆角", @"key":@"CardCornerRadius", @"value":@22.0, @"min":@0.0, @"max":@48.0, @"help":@"调整卡片四角的圆弧半径。"}
     ];
-    for (NSDictionary *option in sizeOptions) {
+    for (NSDictionary *option in sliderOptions) {
+        PSSpecifier *group = [PSSpecifier groupSpecifierWithName:nil];
+        [group setProperty:option[@"help"] forKey:PSFooterTextGroupKey];
+        [items addObject:group];
         PSSpecifier *slider = [self preferenceNamed:option[@"name"] key:option[@"key"] defaultValue:option[@"value"] cell:PSSliderCell];
         [slider setProperty:option[@"min"] forKey:PSControlMinimumKey];
         [slider setProperty:option[@"max"] forKey:PSControlMaximumKey];
@@ -80,24 +82,6 @@ static void PGWriteValue(NSString *key, id value) {
         [items addObject:slider];
     }
     [items addObject:[self buttonNamed:@"文字颜色" action:@selector(chooseTextColor)]];
-
-    PSSpecifier *glass = [PSSpecifier groupSpecifierWithName:@"毛玻璃背景"];
-    [glass setProperty:@"调节毛玻璃可见强度、叠加底色透明度和卡片圆角。"
-                 forKey:PSFooterTextGroupKey];
-    [items addObject:glass];
-    NSArray<NSDictionary *> *glassOptions = @[
-        @{@"name":@"毛玻璃强度", @"key":@"CardBlur", @"value":@0.82, @"min":@0.0, @"max":@1.0},
-        @{@"name":@"背景透明度", @"key":@"CardOpacity", @"value":@0.78, @"min":@0.05, @"max":@1.0},
-        @{@"name":@"卡片圆角", @"key":@"CardCornerRadius", @"value":@22.0, @"min":@0.0, @"max":@48.0}
-    ];
-    for (NSDictionary *option in glassOptions) {
-        PSSpecifier *slider = [self preferenceNamed:option[@"name"] key:option[@"key"] defaultValue:option[@"value"] cell:PSSliderCell];
-        [slider setProperty:option[@"min"] forKey:PSControlMinimumKey];
-        [slider setProperty:option[@"max"] forKey:PSControlMaximumKey];
-        [slider setProperty:@YES forKey:@"showValue"];
-        [items addObject:slider];
-    }
-    [items addObject:[self buttonNamed:@"毛玻璃底色和透明度" action:@selector(chooseBackgroundColor)]];
     [items addObject:[PSSpecifier groupSpecifierWithName:@"操作"]];
     [items addObject:[self buttonNamed:@"恢复默认设置" action:@selector(onResetSettings)]];
     [items addObject:[self buttonNamed:@"注销桌面" action:@selector(onRespring)]];
@@ -143,18 +127,13 @@ static void PGWriteValue(NSString *key, id value) {
     NSString *stored = CFBridgingRelease(value);
     UIColorPickerViewController *picker = [UIColorPickerViewController new];
     picker.delegate = self;
-    picker.supportsAlpha = [key isEqualToString:@"CardTintColor"];
+    picker.supportsAlpha = NO;
     picker.selectedColor = [self colorForHex:stored fallback:fallback];
     [self presentViewController:picker animated:YES completion:nil];
 }
 
 - (void)chooseTextColor {
     [self showColorPickerForKey:@"TextColor" fallback:UIColor.whiteColor];
-}
-
-- (void)chooseBackgroundColor {
-    [self showColorPickerForKey:@"CardTintColor"
-                       fallback:[UIColor colorWithWhite:0 alpha:0.12]];
 }
 
 - (void)storeSelectedColor:(UIColor *)color {
@@ -185,7 +164,7 @@ static void PGWriteValue(NSString *key, id value) {
 - (void)onResetSettings {
     NSArray *keys = @[@"EnabledPerfectGrabber", @"VibrationFeedback", @"Disable24H", @"ChargingIcon",
                       @"FontSize", @"TextColor", @"CardWidth", @"CardScale",
-                      @"CardBlur", @"CardOpacity", @"CardCornerRadius", @"CardTintColor"];
+                      @"CardBlur", @"CardOpacity", @"CardCornerRadius"];
     for (NSString *key in keys) {
         CFPreferencesSetAppValue((__bridge CFStringRef)key, NULL, (__bridge CFStringRef)PGDomain);
     }

@@ -15,7 +15,6 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
 @property (nonatomic, readwrite) CGFloat cardBlur;
 @property (nonatomic, readwrite) CGFloat cardOpacity;
 @property (nonatomic, readwrite) CGFloat cardCornerRadius;
-@property (nonatomic, readwrite) UIColor *cardTintColor;
 @end
 
 @implementation PerfectGrabberPreferences
@@ -41,7 +40,6 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
     NSString *hex = [[value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]
                      stringByReplacingOccurrencesOfString:@"#" withString:@""];
     if (hex.length != 6 && hex.length != 8) return fallback;
-
     unsigned long long rgba = 0;
     NSScanner *scanner = [NSScanner scannerWithString:hex];
     if (![scanner scanHexLongLong:&rgba] || !scanner.isAtEnd) return fallback;
@@ -57,15 +55,16 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
     self.vibrationFeedback = [[self valueForKey:@"VibrationFeedback" fallback:@YES] boolValue];
     self.disable24Hour = [[self valueForKey:@"Disable24H" fallback:@NO] boolValue];
     self.chargingIcon = [[self valueForKey:@"ChargingIcon" fallback:@YES] boolValue];
-    self.fontSize = MAX(8.0, MIN(28.0, [[self valueForKey:@"FontSize" fallback:@12.0] doubleValue]));
-    self.textColor = [PerfectGrabberPreferences colorFromHexString:[self valueForKey:@"TextColor" fallback:@"#FFFFFF"]
-                                                           fallback:UIColor.whiteColor];
-    self.cardWidth = MAX(300.0, MIN(1400.0, [[self valueForKey:@"CardWidth" fallback:@1000.0] doubleValue]));
+    self.fontSize = MAX(8.0, MIN(28.0, [[self valueForKey:@"FontSize" fallback:@15.0] doubleValue]));
+    self.textColor = [PerfectGrabberPreferences colorFromHexString:
+                      [self valueForKey:@"TextColor" fallback:@"#FFFFFF"] fallback:UIColor.whiteColor];
+    self.cardWidth = MAX(300.0, MIN(800.0,
+                      [[self valueForKey:@"CardWidth" fallback:@460.0] doubleValue]));
     self.cardScale = MAX(0.7, MIN(1.6, [[self valueForKey:@"CardScale" fallback:@1.0] doubleValue]));
     self.cardBlur = MAX(0.0, MIN(1.0, [[self valueForKey:@"CardBlur" fallback:@0.82] doubleValue]));
     self.cardOpacity = MAX(0.05, MIN(1.0, [[self valueForKey:@"CardOpacity" fallback:@0.78] doubleValue]));
-    self.cardCornerRadius = MAX(0.0, MIN(48.0, [[self valueForKey:@"CardCornerRadius" fallback:@22.0] doubleValue]));
-    self.cardTintColor = [PerfectGrabberPreferences colorFromHexString:[self valueForKey:@"CardTintColor" fallback:@"#20000000"] fallback:[UIColor colorWithWhite:0 alpha:0.12]];
+    self.cardCornerRadius = MAX(0.0, MIN(48.0,
+                            [[self valueForKey:@"CardCornerRadius" fallback:@22.0] doubleValue]));
 }
 
 @end

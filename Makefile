@@ -10,7 +10,7 @@ PerfectGrabber_FILES = Tweak.xm PerfectGrabberPreferences.m PGGrabberOverlayView
 PerfectGrabber_CFLAGS = -fobjc-arc
 # MediaRemote 走 dlopen/dlsym 运行时加载，不写进 FRAMEWORKS（SDK 里没有它的 stub）。
 # IOKit 提供电池温度；方向显示依赖系统下拉手势，不再读取重力。
-PerfectGrabber_FRAMEWORKS = Foundation UIKit AudioToolbox IOKit
+PerfectGrabber_FRAMEWORKS = Foundation UIKit CoreGraphics QuartzCore AudioToolbox IOKit CydiaSubstrate
 
 BUNDLE_NAME = PerfectGrabberSettings
 PerfectGrabberSettings_FILES = prefs/PerfectGrabberSettingsController.m
