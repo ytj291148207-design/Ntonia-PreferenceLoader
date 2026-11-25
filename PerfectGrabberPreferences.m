@@ -9,7 +9,6 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
 @property (nonatomic, readwrite) BOOL disable24Hour;
 @property (nonatomic, readwrite) BOOL chargingIcon;
 @property (nonatomic, readwrite) CGFloat fontSize;
-@property (nonatomic, readwrite) NSInteger fontStyle;
 @property (nonatomic, readwrite) UIColor *textColor;
 @property (nonatomic, readwrite) CGFloat cardWidth;
 @property (nonatomic, readwrite) CGFloat cardScale;
@@ -59,7 +58,6 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
     self.disable24Hour = [[self valueForKey:@"Disable24H" fallback:@NO] boolValue];
     self.chargingIcon = [[self valueForKey:@"ChargingIcon" fallback:@YES] boolValue];
     self.fontSize = MAX(8.0, MIN(28.0, [[self valueForKey:@"FontSize" fallback:@12.0] doubleValue]));
-    self.fontStyle = MAX(0, MIN(2, [[self valueForKey:@"FontStyle" fallback:@0] integerValue]));
     self.textColor = [PerfectGrabberPreferences colorFromHexString:[self valueForKey:@"TextColor" fallback:@"#FFFFFF"]
                                                            fallback:UIColor.whiteColor];
     self.cardWidth = MAX(300.0, MIN(1400.0, [[self valueForKey:@"CardWidth" fallback:@1000.0] doubleValue]));

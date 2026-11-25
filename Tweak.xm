@@ -185,6 +185,16 @@ static void PGPreferencesChanged(CFNotificationCenterRef center, void *observer,
         self.card = [[PGGrabberOverlayView alloc] initWithFrame:CGRectZero];
         self.card.translatesAutoresizingMaskIntoConstraints = YES;
         self.card.onClose = ^{ [weakSelf hide]; };
+        self.card.onHeightChange = ^(CGFloat height) {
+            __strong typeof(weakSelf) owner = weakSelf;
+            if (!owner || !owner.card || owner.window.hidden) return;
+            CGRect f = owner.card.frame;
+            f.size.height = height;
+            [UIView animateWithDuration:0.28 delay:0.0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut animations:^{
+                owner.card.frame = f;
+                [owner.card setNeedsLayout];
+            } completion:nil];
+        };
         self.window.card = self.card;
         [self.window.rootViewController.view addSubview:self.card];
     }
@@ -207,15 +217,6 @@ static void PGPreferencesChanged(CFNotificationCenterRef center, void *observer,
     self.card.cornerRadius = p.cardCornerRadius;
     CGFloat height = [self.card heightForWidth:width];
     self.card.frame = CGRectMake((bounds.size.width - width) / 2.0, top, width, height);
-    __weak typeof(self) weakSelf = self;
-    self.card.onHeightChange = ^(CGFloat updatedHeight) {
-        __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf || !strongSelf.window || strongSelf.window.hidden) return;
-        CGRect frame = strongSelf.card.frame;
-        frame.size.height = updatedHeight;
-        strongSelf.card.frame = frame;
-        [strongSelf.card setNeedsLayout];
-    };
     [self.card setNeedsLayout];
 }
 - (void)hide {

@@ -15,13 +15,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// Corner radius in points at cardScale == 1.0; it scales with cardScale.
 @property (nonatomic, assign) CGFloat cornerRadius;
 
-@property (nonatomic, assign, readonly, getter=isExpanded) BOOL expanded;
 
-/// Called when the close button is tapped. If unset, the card removes itself.
+/// Called when the close button is tapped.
 @property (nonatomic, copy, nullable) void (^onClose)(void);
-/// Called when the preferred height changes (including expansion, scale or width changes).
+/// Called when expansion changes so the edge host can resize its window.
 @property (nonatomic, copy, nullable) void (^onHeightChange)(CGFloat height);
-
 - (void)setExpanded:(BOOL)expanded animated:(BOOL)animated;
 /// Returns the compact or expanded card height for the supplied width.
 - (CGFloat)heightForWidth:(CGFloat)width;

@@ -37,11 +37,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @property (nonatomic, copy) NSData *displayedArtworkData;
 @property (nonatomic, assign) BOOL expanded;
 @property (nonatomic, assign) CGFloat currentCardHeight;
-@property (nonatomic, assign) CGFloat lastReportedHeight;
 - (UILabel *)newLabelWithWeight:(UIFontWeight)weight alignment:(NSTextAlignment)alignment;
 - (UIButton *)buttonWithSymbol:(NSString *)symbol fallback:(NSString *)fallback accessibility:(NSString *)accessibility;
-- (CGFloat)heightForCurrentWidth;
-- (void)reportHeightIfNeeded:(BOOL)force;
 - (void)updateContents;
 @end
 
@@ -52,7 +49,6 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @synthesize backgroundOpacity = _backgroundOpacity;
 @synthesize cornerRadius = _cornerRadius;
 @synthesize expanded = _expanded;
-@synthesize currentCardHeight = _currentCardHeight;
 
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
@@ -153,8 +149,6 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
     [self refreshAppearance];
     [self updateContents];
-    self.currentCardHeight = [self heightForCurrentWidth];
-    self.lastReportedHeight = self.currentCardHeight;
     return self;
 }
 
@@ -193,14 +187,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     if (fabs(next - _cardScale) < 0.001) return;
     _cardScale = next;
     [self refreshAppearance];
-    CGFloat height = [self heightForCurrentWidth];
-    self.currentCardHeight = height;
-    if (CGRectGetWidth(self.bounds) > 0.0) {
-        CGRect frame = self.frame;
-        frame.size.height = height;
-        self.frame = frame;
-    }
-    [self reportHeightIfNeeded:YES];
+    [self setNeedsLayout];
 }
 
 - (CGFloat)blurAmount { return _blurAmount; }
@@ -222,17 +209,12 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 }
 
 - (BOOL)isExpanded { return _expanded; }
-- (CGFloat)currentCardHeight { return _currentCardHeight; }
 
 - (void)setExpanded:(BOOL)expanded animated:(BOOL)animated {
     if (_expanded == expanded) return;
     _expanded = expanded;
     CGFloat targetHeight = [self heightForCurrentWidth];
     self.currentCardHeight = targetHeight;
-    self.lastReportedHeight = targetHeight;
-
-    // Notify the window host before animation so it can grow the edge-attached
-    // UIWindow. This view remains a single card; it never creates another window.
     if (self.onHeightChange) self.onHeightChange(targetHeight);
 
     void (^layoutBlock)(void) = ^{
@@ -261,26 +243,12 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     return [self heightForWidth:CGRectGetWidth(self.bounds)];
 }
 
-- (void)reportHeightIfNeeded:(BOOL)force {
-    CGFloat height = [self heightForCurrentWidth];
-    self.currentCardHeight = height;
-    if (!force && fabs(height - self.lastReportedHeight) < 0.5) return;
-    self.lastReportedHeight = height;
-    if (self.onHeightChange) self.onHeightChange(height);
-}
-
 #pragma mark - Appearance and layout
 
 - (UIFont *)configuredFontWithSize:(CGFloat)size weight:(UIFontWeight)weight {
     PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
     CGFloat requested = (preferences.fontSize > 0.0 ? preferences.fontSize : 13.0) * self.cardScale;
-    UIFontWeight chosenWeight = (preferences.fontStyle == 1) ? UIFontWeightBold : weight;
-    UIFont *font = [UIFont systemFontOfSize:MAX(9.0, MIN(24.0, requested)) weight:chosenWeight];
-    if (preferences.fontStyle == 2) {
-        UIFontDescriptor *descriptor = [font.fontDescriptor fontDescriptorWithSymbolicTraits:UIFontDescriptorTraitItalic];
-        if (descriptor) font = [UIFont fontWithDescriptor:descriptor size:font.pointSize];
-    }
-    return font;
+    return [UIFont systemFontOfSize:MAX(9.0, MIN(24.0, requested)) weight:weight];
 }
 
 - (void)applyAppearance {
@@ -408,7 +376,6 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.titleLabel.hidden = NO;
     self.artistLabel.hidden = NO;
     self.lyricsLabel.hidden = NO;
-    [self reportHeightIfNeeded:NO];
 }
 
 #pragma mark - Content updates

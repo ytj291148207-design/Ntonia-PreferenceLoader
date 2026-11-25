@@ -79,7 +79,6 @@ static void PGWriteValue(NSString *key, id value) {
         [slider setProperty:@YES forKey:@"showValue"];
         [items addObject:slider];
     }
-    [items addObject:[self preferenceNamed:@"粗体字体" key:@"FontStyle" defaultValue:@0 cell:PSSwitchCell]];
     [items addObject:[self buttonNamed:@"文字颜色" action:@selector(chooseTextColor)]];
 
     PSSpecifier *glass = [PSSpecifier groupSpecifierWithName:@"毛玻璃背景"];
@@ -185,7 +184,7 @@ static void PGWriteValue(NSString *key, id value) {
 
 - (void)onResetSettings {
     NSArray *keys = @[@"EnabledPerfectGrabber", @"VibrationFeedback", @"Disable24H", @"ChargingIcon",
-                      @"FontSize", @"FontStyle", @"TextColor", @"CardWidth", @"CardScale",
+                      @"FontSize", @"TextColor", @"CardWidth", @"CardScale",
                       @"CardBlur", @"CardOpacity", @"CardCornerRadius", @"CardTintColor"];
     for (NSString *key in keys) {
         CFPreferencesSetAppValue((__bridge CFStringRef)key, NULL, (__bridge CFStringRef)PGDomain);

@@ -13,7 +13,6 @@ FOUNDATION_EXPORT NSString *const PGPreferencesChangedNotification;
 @property (nonatomic, readonly) BOOL disable24Hour;
 @property (nonatomic, readonly) BOOL chargingIcon;
 @property (nonatomic, readonly) CGFloat fontSize;
-@property (nonatomic, readonly) NSInteger fontStyle;
 @property (nonatomic, readonly) UIColor *textColor;
 @property (nonatomic, readonly) CGFloat cardWidth;
 @property (nonatomic, readonly) CGFloat cardScale;
