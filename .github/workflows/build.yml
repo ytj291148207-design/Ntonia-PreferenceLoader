@@ -12,6 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
+    timeout-minutes: 45
     env:
       THEOS: /Users/runner/theos
     steps:
