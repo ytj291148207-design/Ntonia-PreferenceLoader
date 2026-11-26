@@ -86,7 +86,7 @@ static void PGWriteValue(NSString *key, id value) {
         @{@"name":@"字体大小", @"key":@"FontSize", @"value":@15.0, @"min":@9.0, @"max":@24.0, @"help":@"调整时间、状态和歌曲信息的文字大小。"},
         @{@"name":@"毛玻璃强度", @"key":@"CardBlur", @"value":@0.82, @"min":@0.0, @"max":@1.0, @"help":@"调整卡片背后模糊效果的强弱；数值越大越明显。"},
         @{@"name":@"背景透明度", @"key":@"CardOpacity", @"value":@0.78, @"min":@0.05, @"max":@1.0, @"help":@"调整卡片深色叠底的不透明程度；数值越大底色越实。"},
-        @{@"name":@"卡片圆角", @"key":@"CardCornerRadius", @"value":@34.0, @"min":@0.0, @"max":@48.0, @@"help":@"调整卡片四角的圆弧半径；超过卡片高度一半时会自动按一半显示（收起态因此看是胶囊）。"}
+        @{@"name":@"卡片圆角", @"key":@"CardCornerRadius", @"value":@34.0, @"min":@0.0, @"max":@48.0, @"help":@"调整卡片四角的圆弧半径；超过卡片高度一半时会自动按一半显示（收起态因此看是胶囊）。"}
     ];
     for (NSDictionary *option in sliderOptions) {
         PSSpecifier *group = [PSSpecifier groupSpecifierWithName:nil];
