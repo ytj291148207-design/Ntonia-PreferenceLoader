@@ -102,6 +102,7 @@ static NSString *PGBundleIdentifierForPID(int pid) {
 @property (nonatomic, assign, getter=isPlaying) BOOL playing;
 @property (nonatomic, copy, nullable) NSString *title;
 @property (nonatomic, copy, nullable) NSString *artist;
+@property (nonatomic, copy, nullable) NSString *album;
 @property (nonatomic, copy, nullable) NSString *bundleIdentifier;
 @property (nonatomic, copy, nullable) NSString *frontmostBundleIdentifier;
 @property (nonatomic, assign) double elapsed;
@@ -283,6 +284,7 @@ static NSString *PGBundleIdentifierForPID(int pid) {
     if (!dictionary) {
         self.title = nil;
         self.artist = nil;
+        self.album = nil;
         self.ratePositive = NO;
         self.elapsedAdvancing = NO;
         self.hasElapsedSample = NO;
@@ -298,6 +300,7 @@ static NSString *PGBundleIdentifierForPID(int pid) {
     id album = dictionary[@"kMRMediaRemoteNowPlayingInfoAlbum"];
     NSString *resolvedTitle = [title isKindOfClass:NSString.class] ? title : nil;
     self.artist = [artist isKindOfClass:NSString.class] ? artist : nil;
+    self.album = [album isKindOfClass:NSString.class] ? album : nil;
     if (resolvedTitle.length == 0) {
         // 有的 App 只填专辑名；再不行就把字典里到底有哪些键打出来，下次一眼能看出差在哪。
         if ([album isKindOfClass:NSString.class] && [album length]) {
@@ -363,9 +366,9 @@ static NSString *PGBundleIdentifierForPID(int pid) {
 }
 
 - (void)notifyIfChanged {
-    NSString *signature = [NSString stringWithFormat:@"%d|%@|%@|%@|%@",
+    NSString *signature = [NSString stringWithFormat:@"%d|%@|%@|%@|%@|%@",
                            self.playing,
-                           self.title ?: @"", self.artist ?: @"",
+                           self.title ?: @"", self.artist ?: @"", self.album ?: @"",
                            self.bundleIdentifier ?: @"",
                            self.frontmostBundleIdentifier ?: @""];
     if ([signature isEqualToString:self.signature]) return;

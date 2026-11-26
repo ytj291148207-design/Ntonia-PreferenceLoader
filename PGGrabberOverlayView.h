@@ -13,6 +13,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat backgroundOpacity;
 /// Corner radius in points at cardScale == 1.0; it scales with cardScale.
 @property (nonatomic, assign) CGFloat cornerRadius;
+/// 独立的展开态卡片高度倍率（0.7–1.6）。
+@property (nonatomic, assign) CGFloat cardHeightScale;
+/// 长按展开播放控制；关闭时默认展开，可用右上角箭头手动收起/展开。
+@property (nonatomic, assign) BOOL longPressControls;
+/// 字体粗细（0–1）。
+@property (nonatomic, assign) CGFloat fontWeight;
+@property (nonatomic, assign) BOOL lyricsLookupEnabled;
 /// 圆角策略：0 统一 / 1 收起强制胶囊 / 2 全部半高 / 3 小圆角。半径始终会被夹到不超过半高。
 @property (nonatomic, assign) NSInteger cornerStyle;
 

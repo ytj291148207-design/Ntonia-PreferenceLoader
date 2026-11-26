@@ -5,6 +5,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <math.h>
+#import <float.h>
 
 @interface SBUIController : NSObject
 + (instancetype)sharedInstance;
@@ -56,6 +57,17 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @property (nonatomic, strong) UILongPressGestureRecognizer *cardLongPress;
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, copy) NSData *displayedArtworkData;
+@property (nonatomic, copy) NSString *currentLyricKey;
+@property (nonatomic, copy) NSString *currentLyrics;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *lyricsCache;
+@property (nonatomic, strong) NSURLSessionDataTask *lyricsTask;
+@property (nonatomic, assign) NSUInteger lyricsRequestGeneration;
+@property (nonatomic, strong) UILabel *elapsedLabel;
+@property (nonatomic, strong) UILabel *durationLabel;
+@property (nonatomic, assign) CGFloat cardHeightScale;
+@property (nonatomic, assign) CGFloat fontWeight;
+@property (nonatomic, assign) BOOL longPressControls;
+@property (nonatomic, assign) BOOL lyricsLookupEnabled;
 @property (nonatomic, assign) BOOL expanded;
 @property (nonatomic, assign) BOOL hasPendingPlaybackState;
 @property (nonatomic, assign) BOOL pendingPlaybackState;
@@ -80,6 +92,10 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @synthesize blurAmount = _blurAmount;
 @synthesize backgroundOpacity = _backgroundOpacity;
 @synthesize cornerRadius = _cornerRadius;
+@synthesize cardHeightScale = _cardHeightScale;
+@synthesize fontWeight = _fontWeight;
+@synthesize longPressControls = _longPressControls;
+@synthesize lyricsLookupEnabled = _lyricsLookupEnabled;
 @synthesize cornerStyle = _cornerStyle;
 @synthesize expanded = _expanded;
 @synthesize compactMode = _compactMode;
@@ -95,6 +111,12 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     _backgroundOpacity = PGClamp(preferences.cardOpacity, 0.0, 1.0);
     _cornerRadius = PGClamp(preferences.cardCornerRadius, 0.0, 80.0);
     _cornerStyle = MAX(0, MIN(3, preferences.cornerStyle));
+    _cardHeightScale = PGClamp(preferences.cardHeightScale, 0.70, 1.60);
+    _fontWeight = PGClamp(preferences.fontWeight, 0.0, 1.0);
+    _longPressControls = preferences.longPressControls;
+    _expanded = !_longPressControls; // 默认收起；可选长按展开。
+    _lyricsLookupEnabled = preferences.lyricsLookupEnabled;
+    _lyricsCache = [NSMutableDictionary dictionary];
     _seekHaptics = [UISelectionFeedbackGenerator new];
     _seekDetentCount = 30;
 
@@ -150,7 +172,10 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     _closeButton.layer.cornerRadius = 10.0;
     _closeButton.clipsToBounds = YES;   // 底色先裁成正圆，避免方角被卡片圆弧切掉
     _closeButton.tintColor = UIColor.whiteColor;
-    [_closeButton addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+    UIImage *initialArrow = [UIImage systemImageNamed:@"chevron.down"];
+    if (initialArrow) [_closeButton setImage:initialArrow forState:UIControlStateNormal]; else [_closeButton setTitle:@"⌄" forState:UIControlStateNormal];
+    _closeButton.accessibilityLabel = @"展开卡片内容";
+    [_closeButton addTarget:self action:@selector(toggleExpandedTapped) forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:_closeButton];
 
     _artworkView = [UIImageView new];
@@ -183,6 +208,15 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     [_progressSlider addTarget:self action:@selector(progressChanged:) forControlEvents:UIControlEventValueChanged];
     [_progressSlider addTarget:self action:@selector(progressEnded:) forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
     [self addSubview:_progressSlider];
+
+    _elapsedLabel = [self newLabelWithWeight:UIFontWeightRegular alignment:NSTextAlignmentLeft];
+    _elapsedLabel.text = @"0:00";
+    _elapsedLabel.hidden = YES;
+    [self addSubview:_elapsedLabel];
+    _durationLabel = [self newLabelWithWeight:UIFontWeightRegular alignment:NSTextAlignmentRight];
+    _durationLabel.text = @"0:00";
+    _durationLabel.hidden = YES;
+    [self addSubview:_durationLabel];
 
     _previousButton = [self buttonWithSymbol:@"backward.end.fill" fallback:@"|◀" accessibility:@"上一首"];
     [_previousButton addTarget:self action:@selector(previousTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -274,6 +308,42 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 }
 
 - (BOOL)isExpanded { return _expanded; }
+- (CGFloat)cardHeightScale { return _cardHeightScale; }
+- (void)setCardHeightScale:(CGFloat)value {
+    CGFloat next = PGClamp(value, 0.70, 1.60);
+    if (fabs(next - _cardHeightScale) < 0.001) return;
+    _cardHeightScale = next;
+    CGFloat height = [self heightForCurrentWidth];
+    if (self.onHeightChange) self.onHeightChange(height);
+    else { CGRect f = self.frame; f.size.height = height; self.frame = f; }
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+}
+- (CGFloat)fontWeight { return _fontWeight; }
+- (void)setFontWeight:(CGFloat)value {
+    _fontWeight = PGClamp(value, 0.0, 1.0);
+    [self refreshAppearance];
+    [self setNeedsLayout];
+}
+- (BOOL)longPressControls { return _longPressControls; }
+- (void)setLongPressControls:(BOOL)value {
+    if (_longPressControls == value) return;
+    _longPressControls = value;
+    // Setter runs only when the stored option actually changes. Turning off
+    // long-press expands controls by default; turning it on returns to compact.
+    [self setExpanded:!value animated:YES];
+}
+- (BOOL)lyricsLookupEnabled { return _lyricsLookupEnabled; }
+- (void)setLyricsLookupEnabled:(BOOL)value {
+    if (_lyricsLookupEnabled == value) return;
+    _lyricsLookupEnabled = value;
+    self.lyricsRequestGeneration += 1;
+    [self.lyricsTask cancel];
+    self.lyricsTask = nil;
+    self.currentLyricKey = nil;
+    self.currentLyrics = @"暂无歌词";
+    [self updateContents];
+}
 - (BOOL)isCompactMode { return _compactMode; }
 - (void)setCompactMode:(BOOL)value { _compactMode=value; [self setNeedsLayout]; }
 - (BOOL)deferNativeGrabberDismissal { return _deferNativeGrabberDismissal; }
@@ -285,9 +355,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     CGFloat targetHeight = [self heightForCurrentWidth];
     [self setNeedsLayout];
 
-    // 有宿主时由宿主同时改 frame 的宽度与高度并驱动内部布局：
-    // 之前这里自己改 frame、宿主再改一次，两个 0.24/0.28s 动画抢同一个值，
-    // 中途会被原生布局覆盖回去，表现就是"展开后自己缩回"。
+    // 面板内嵌宿主同步调整高度；不同时自改 frame，避免与 SpringBoard 布局动画争抢。
     if (self.onHeightChange) {
         self.onHeightChange(targetHeight);
         return;
@@ -310,9 +378,13 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
 - (CGFloat)heightForWidth:(CGFloat)width {
     CGFloat scale = PGClamp(self.cardScale, 0.65, 1.60);
-    if (self.compactMode) return (self.isExpanded ? 104.0 : 44.0) * scale;
-    // Room for a readable status row, a 60pt artwork row, and expanded control buttons.
-    return (112.0 + (self.isExpanded ? 64.0 : 0.0)) * scale;
+    if (self.compactMode && self.isExpanded) {
+        CGFloat vertical = PGClamp(self.cardHeightScale, 0.70, 1.60);
+        CGFloat controlContentHeight = (193.0 * vertical + 24.0) * scale;
+        return MAX(220.0 * vertical * scale, controlContentHeight);
+    }
+    CGFloat height = self.compactMode ? 44.0 : (112.0 + (self.isExpanded ? 64.0 * self.cardHeightScale : 0.0));
+    return MAX(44.0, height * scale);
 }
 
 - (CGFloat)heightForCurrentWidth {
@@ -364,7 +436,9 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
     CGFloat ratio = PGClamp((preferences.fontSize > 0.0 ? preferences.fontSize : 15.0) / 15.0, 0.60, 1.60);
     CGFloat requested = size * self.cardScale * ratio;
-    return [UIFont systemFontOfSize:MAX(7.0, MIN(26.0, requested)) weight:weight];
+    CGFloat userWeight = PGClamp(preferences.fontWeight, 0.0, 1.0);
+    CGFloat adjustedWeight = PGClamp((CGFloat)weight + (userWeight - 0.5) * 0.8, UIFontWeightUltraLight, UIFontWeightBlack);
+    return [UIFont systemFontOfSize:MAX(7.0, MIN(26.0, requested)) weight:adjustedWeight];
 }
 
 - (void)applyAppearance {
@@ -459,28 +533,41 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         CGFloat closeInset = PGFrameInset(statusY, statusY + close, height, radius);
         self.closeButton.frame = CGRectMake(width - closeInset - basePad - close, statusY, close, close);
         self.closeButton.hidden = NO;
+        UIImage *toggleImage = [UIImage systemImageNamed:(self.isExpanded ? @"chevron.up" : @"chevron.down")];
+        if (toggleImage) [self.closeButton setImage:toggleImage forState:UIControlStateNormal];
+        else [self.closeButton setTitle:(self.isExpanded ? @"⌃" : @"⌄") forState:UIControlStateNormal];
+        self.closeButton.accessibilityLabel = self.isExpanded ? @"收起卡片内容" : @"展开卡片内容";
 
         if (!self.isExpanded) {
-            CGFloat y = 21.0 * scale, art = 18.0 * scale;
+            CGFloat y = 21.0 * scale, art = 20.0 * scale;
             CGFloat contentInset = basePad + PGFrameInset(y, y + art, height, radius);
             self.artworkView.frame = CGRectMake(contentInset, y, art, art);
-            self.artworkView.layer.cornerRadius = 4.0 * scale;
+            self.artworkView.layer.cornerRadius = 5.0 * scale;
             self.artworkFallbackLabel.frame = self.artworkView.frame;
-            CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 5.0 * scale;
-            self.titleLabel.frame = CGRectMake(tx, y, MAX(0.0, width - contentInset - tx), art);
+            CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 6.0 * scale;
+            CGFloat titleWidth = MAX(0.0, width - tx - basePad - close - 3.0 * scale);
+            self.titleLabel.frame = CGRectMake(tx, y - 1.0 * scale, titleWidth, 13.0 * scale);
+            self.artistLabel.frame = CGRectMake(tx, y + 10.0 * scale, titleWidth, 11.0 * scale);
             self.titleLabel.font = [self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];
+            self.artistLabel.font = [self configuredFontWithSize:8.0 weight:UIFontWeightRegular];
             self.titleLabel.adjustsFontSizeToFitWidth = YES;
-            self.titleLabel.minimumScaleFactor = 0.5;
-            self.titleLabel.text = self.compactTrackText.length ? self.compactTrackText : self.titleLabel.text;
-            self.artistLabel.frame = CGRectZero;
-            self.lyricsLabel.frame = CGRectZero;
+            self.artistLabel.adjustsFontSizeToFitWidth = YES;
+            self.titleLabel.minimumScaleFactor = 0.45;
+            self.artistLabel.minimumScaleFactor = 0.45;
+            self.titleLabel.text = self.compactTrackText.length ? self.compactTrackText : @"未播放";
+            NSString *compactArtist = PGNowPlaying.sharedInstance.artist ?: @"";
+            NSString *compactAlbum = PGNowPlaying.sharedInstance.album ?: @"";
+            self.artistLabel.text = compactArtist.length ? (compactAlbum.length ? [NSString stringWithFormat:@"%@ · %@", compactArtist, compactAlbum] : compactArtist) : compactAlbum;
+            self.artistLabel.hidden = self.artistLabel.text.length == 0;
             self.artworkView.hidden = NO;
             self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
             self.titleLabel.hidden = NO;
-            self.artistLabel.hidden = YES;
+            self.artistLabel.hidden = NO;
             self.lyricsLabel.hidden = YES;
             self.progressSlider.hidden = YES;
             self.progressSlider.frame = CGRectZero;
+            self.elapsedLabel.hidden = YES;
+            self.durationLabel.hidden = YES;
             self.previousButton.hidden = YES;
             self.playPauseButton.hidden = YES;
             self.nextButton.hidden = YES;
@@ -488,42 +575,59 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
             return;
         }
 
-        CGFloat y = 24.0 * scale, art = 34.0 * scale;
+        CGFloat availableVertical = MAX(0.70, (height / MAX(scale, 0.65) - 24.0) / 193.0);
+        CGFloat verticalScale = scale * MIN(self.cardHeightScale, availableVertical);
+        CGFloat art = 48.0 * scale;
+        CGFloat y = 25.0 * verticalScale;
         CGFloat contentInset = basePad + PGFrameInset(y, y + art, height, radius);
         self.artworkView.frame = CGRectMake(contentInset, y, art, art);
-        self.artworkView.layer.cornerRadius = 6.0 * scale;
+        self.artworkView.layer.cornerRadius = 8.0 * scale;
         self.artworkFallbackLabel.frame = self.artworkView.frame;
-        CGFloat controls = 88.0 * scale;
-        CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 7.0 * scale;
-        CGFloat textW = MAX(20.0, width - contentInset - tx - controls - 4.0 * scale);
-        self.titleLabel.frame = CGRectMake(tx, y, textW, 18.0 * scale);
-        self.artistLabel.frame = CGRectMake(tx, y + 18.0 * scale, textW, 15.0 * scale);
-        self.lyricsLabel.frame = CGRectZero;
+        CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 9.0 * scale;
+        CGFloat textW = MAX(24.0, width - tx - basePad - 8.0 * scale);
+        self.titleLabel.frame = CGRectMake(tx, y, textW, 18.0 * verticalScale);
+        self.artistLabel.frame = CGRectMake(tx, y + 17.0 * verticalScale, textW, 15.0 * verticalScale);
+        self.lyricsLabel.frame = CGRectMake(tx, y + 32.0 * verticalScale, textW, 17.0 * verticalScale);
         self.titleLabel.font = [self configuredFontWithSize:13.0 weight:UIFontWeightSemibold];
-        self.artistLabel.font = [self configuredFontWithSize:11.0 weight:UIFontWeightRegular];
+        self.artistLabel.font = [self configuredFontWithSize:10.0 weight:UIFontWeightRegular];
+        self.lyricsLabel.font = [self configuredFontWithSize:10.0 weight:UIFontWeightRegular];
         self.artworkView.hidden = NO;
         self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
         self.titleLabel.hidden = NO;
         self.artistLabel.hidden = NO;
-        self.lyricsLabel.hidden = YES;
+        self.lyricsLabel.hidden = NO;
         self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.62) weight:UIFontWeightLight];
-        CGFloat bs = 24.0 * scale, gap = 4.0 * scale;
-        CGFloat x = width - basePad - (bs * 3.0 + gap * 2.0);
-        CGFloat cy = y + 4.0 * scale;
-        self.previousButton.frame = CGRectMake(x, cy, bs, bs);
-        self.playPauseButton.frame = CGRectMake(x + bs + gap, cy, bs, bs);
-        self.nextButton.frame = CGRectMake(x + (bs + gap) * 2.0, cy, bs, bs);
+
+        CGFloat bs = 32.0 * scale, gap = 28.0 * scale;
+        CGFloat controlY = 112.0 * verticalScale;
+        CGFloat controlsWidth = bs * 3.0 + gap * 2.0;
+        CGFloat startX = MAX(contentInset, (width - controlsWidth) * 0.5);
+        self.previousButton.frame = CGRectMake(startX, controlY, bs, bs);
+        self.playPauseButton.frame = CGRectMake(startX + bs + gap, controlY, bs, bs);
+        self.nextButton.frame = CGRectMake(startX + (bs + gap) * 2.0, controlY, bs, bs);
         self.previousButton.hidden = NO;
         self.playPauseButton.hidden = NO;
         self.nextButton.hidden = NO;
+
         if (PGNowPlaying.sharedInstance.canSeek) {
-            CGFloat sliderY = height - 18.0 * scale;
-            CGFloat sliderInset = PGFrameInset(sliderY, sliderY + 14.0 * scale, height, radius);
-            self.progressSlider.frame = CGRectMake(tx, sliderY, MAX(40.0, width - tx - sliderInset), 14.0 * scale);
+            CGFloat sliderY = 165.0 * verticalScale;
+            CGFloat sliderH = 15.0 * scale;
+            CGFloat sliderInset = PGFrameInset(sliderY, sliderY + sliderH, height, radius);
+            CGFloat sliderX = contentInset + 5.0 * scale;
+            CGFloat sliderW = MAX(40.0, width - sliderX - sliderInset - 5.0 * scale);
+            self.progressSlider.frame = CGRectMake(sliderX, sliderY, sliderW, sliderH);
+            self.elapsedLabel.frame = CGRectMake(sliderX, sliderY + 13.0 * scale, 46.0 * scale, 15.0 * scale);
+            self.durationLabel.frame = CGRectMake(sliderX, sliderY + 13.0 * scale, sliderW, 15.0 * scale);
+            self.elapsedLabel.font = [self configuredFontWithSize:8.0 weight:UIFontWeightRegular];
+            self.durationLabel.font = [self configuredFontWithSize:8.0 weight:UIFontWeightRegular];
+            self.elapsedLabel.hidden = NO;
+            self.durationLabel.hidden = NO;
             self.progressSlider.hidden = NO;
         } else {
             self.progressSlider.frame = CGRectZero;
             self.progressSlider.hidden = YES;
+            self.elapsedLabel.hidden = YES;
+            self.durationLabel.hidden = YES;
         }
         return;
     }
@@ -604,6 +708,106 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
 #pragma mark - Content updates
 
+static NSString *PGFirstLyricLine(NSString *lyrics) {
+    for (NSString *line in [lyrics componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+        NSString *candidate = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (!candidate.length || [candidate hasPrefix:@"[ar:"] || [candidate hasPrefix:@"[ti:"] || [candidate hasPrefix:@"[al:"]) continue;
+        NSRegularExpression *prefix = [NSRegularExpression regularExpressionWithPattern:@"^(?:\\[\\d{1,2}:\\d{2}(?:\\.\\d{1,3})?\\])+\\s*" options:0 error:nil];
+        candidate = [prefix stringByReplacingMatchesInString:candidate options:0 range:NSMakeRange(0, candidate.length) withTemplate:@""];
+        if (candidate.length) return candidate;
+    }
+    return nil;
+}
+
+static NSString *PGTimedLyricAtTime(NSString *lrc, double seconds) {
+    if (lrc.length == 0) return nil;
+    NSArray<NSString *> *lines = [lrc componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+    double bestTime = -1.0;
+    NSString *bestText = nil;
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"\\[(\\d{1,2}):(\\d{2})(?:\\.(\\d{1,3}))?\\]" options:0 error:nil];
+    for (NSString *line in lines) {
+        NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:line options:0 range:NSMakeRange(0, line.length)];
+        if (!matches.count) continue;
+        NSTextCheckingResult *last = matches.lastObject;
+        NSString *text = [line substringFromIndex:NSMaxRange(last)];
+        for (NSTextCheckingResult *match in matches) {
+            double mm = [[line substringWithRange:[match rangeAtIndex:1]] doubleValue];
+            double ss = [[line substringWithRange:[match rangeAtIndex:2]] doubleValue];
+            double t = mm * 60.0 + ss;
+            if ([match rangeAtIndex:3].location != NSNotFound) {
+                NSString *fraction = [line substringWithRange:[match rangeAtIndex:3]];
+                t += fraction.doubleValue / pow(10.0, fraction.length);
+            }
+            if (t <= seconds && t >= bestTime) { bestTime = t; bestText = text; }
+        }
+    }
+    return bestText.length ? bestText : nil;
+}
+
+- (void)fetchLyricsForTitle:(NSString *)title artist:(NSString *)artist album:(NSString *)album duration:(double)duration {
+    NSString *key = [NSString stringWithFormat:@"%@|%@|%@", title ?: @"", artist ?: @"", album ?: @""];
+    if (key.length < 3 || [key isEqualToString:self.currentLyricKey]) return;
+    [self.lyricsTask cancel];
+    self.lyricsTask = nil;
+    NSUInteger generation = ++self.lyricsRequestGeneration;
+    self.currentLyricKey = key;
+    if (self.lyricsCache[key]) { self.currentLyrics = self.lyricsCache[key]; return; }
+    self.currentLyrics = @"正在查找歌词…";
+    NSURLComponents *components = [NSURLComponents componentsWithString:@"https://lrclib.net/api/search"];
+    components.queryItems = @[[NSURLQueryItem queryItemWithName:@"q" value:[NSString stringWithFormat:@"%@ %@", title ?: @"", artist ?: @""]]];
+    NSURL *url = components.URL;
+    if (!url) { self.currentLyrics = @"暂无歌词"; return; }
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:8.0];
+    [request setValue:@"Ntonia-PreferenceLoader/1.1 (iOS lyrics lookup)" forHTTPHeaderField:@"User-Agent"];
+    __weak typeof(self) weakSelf = self;
+    self.lyricsTask = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
+        BOOL validResponse = !error && data.length > 0 && (!http || (http.statusCode >= 200 && http.statusCode < 300));
+        NSArray *rows = validResponse ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSDictionary *best = nil;
+        double bestScore = -DBL_MAX;
+        if ([rows isKindOfClass:NSArray.class]) for (NSDictionary *row in rows) {
+            NSString *plain = [row[@"plainLyrics"] isKindOfClass:NSString.class] ? row[@"plainLyrics"] : nil;
+            NSString *synced = [row[@"syncedLyrics"] isKindOfClass:NSString.class] ? row[@"syncedLyrics"] : nil;
+            if (!plain.length && !synced.length) continue;
+            double candidateDuration = [row[@"duration"] respondsToSelector:@selector(doubleValue)] ? [row[@"duration"] doubleValue] : 0.0;
+            double score = 0.0;
+            if (duration > 0.0 && candidateDuration > 0.0) score -= fabs(candidateDuration - duration) * 0.25;
+            NSString *rowArtist = [row[@"artistName"] description] ?: @"";
+            if (artist.length && [rowArtist localizedCaseInsensitiveContainsString:artist]) score += 20.0;
+            NSString *rowTitle = [row[@"trackName"] description] ?: @"";
+            if (title.length && ![rowTitle localizedCaseInsensitiveContainsString:title]) continue;
+            if (title.length) score += 30.0;
+            if (synced.length) score += 2.0;
+            if (score > bestScore) { bestScore = score; best = row; }
+        }
+        NSString *lyric = [best[@"syncedLyrics"] isKindOfClass:NSString.class] ? best[@"syncedLyrics"] : nil;
+        if (!lyric.length) lyric = [best[@"plainLyrics"] isKindOfClass:NSString.class] ? best[@"plainLyrics"] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            PGGrabberOverlayView *strongSelf = weakSelf;
+            if (!strongSelf || !strongSelf.lyricsLookupEnabled ||
+                strongSelf.lyricsRequestGeneration != generation || ![strongSelf.currentLyricKey isEqualToString:key]) return;
+            strongSelf.lyricsTask = nil;
+            if (!validResponse) {
+                strongSelf.currentLyrics = @"歌词查询失败";
+                [strongSelf setNeedsLayout];
+                return; // transient network/HTTP errors must not poison the cache
+            }
+            strongSelf.currentLyrics = lyric.length ? lyric : @"暂无歌词";
+            if (lyric.length) strongSelf.lyricsCache[key] = lyric;
+            if (strongSelf.lyricsCache.count > 40) [strongSelf.lyricsCache removeObjectForKey:strongSelf.lyricsCache.allKeys.firstObject];
+            [strongSelf updateContents];
+        });
+    }];
+    [self.lyricsTask resume];
+}
+
+- (NSString *)formattedTime:(double)seconds {
+    if (!isfinite(seconds) || seconds < 0.0) seconds = 0.0;
+    NSInteger total = (NSInteger)floor(seconds);
+    return [NSString stringWithFormat:@"%ld:%02ld", (long)(total / 60), (long)(total % 60)];
+}
+
 - (NSInteger)currentBatteryPercentage {
     Class cls = NSClassFromString(@"SBUIController");
     if ([cls respondsToSelector:@selector(sharedInstance)]) {
@@ -647,6 +851,18 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
     NSString *title = nowPlaying.title;
     NSString *artist = nowPlaying.artist;
+    NSString *album = nowPlaying.album;
+    if (self.lyricsLookupEnabled && preferences.lyricsLookupEnabled && title.length) {
+        self.lyricsLookupEnabled = preferences.lyricsLookupEnabled;
+        [self fetchLyricsForTitle:title artist:artist album:album duration:nowPlaying.duration];
+    } else {
+        self.lyricsLookupEnabled = preferences.lyricsLookupEnabled;
+        self.lyricsRequestGeneration += 1;
+        [self.lyricsTask cancel];
+        self.lyricsTask = nil;
+        self.currentLyricKey = nil;
+        self.currentLyrics = @"暂无歌词";
+    }
     NSData *artworkData = nowPlaying.artworkData;
     // Save the last valid track so the idle card still has artwork/metadata after playback stops.
     if (artworkData.length && ![artworkData isEqualToData:self.displayedArtworkData]) {
@@ -663,10 +879,14 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         }
     }
     self.titleLabel.text = title.length ? title : (showPlaying ? @"正在播放" : @"未播放");
-    self.artistLabel.text = artist.length ? artist : @"—";
-    self.lyricsLabel.text = @"暂无歌词";
+    self.artistLabel.text = artist.length ? ([album length] ? [NSString stringWithFormat:@"%@ · %@", artist, album] : artist) : ([album length] ? album : @"—");
+    NSString *lyric = (nowPlaying.duration > 0.0) ? PGTimedLyricAtTime(self.currentLyrics, nowPlaying.elapsed) : nil;
+    if (!lyric.length && self.currentLyrics.length && ![self.currentLyrics isEqualToString:@"暂无歌词"] && ![self.currentLyrics isEqualToString:@"正在查找歌词…"]) lyric = PGFirstLyricLine(self.currentLyrics);
+    self.lyricsLabel.text = lyric.length ? lyric : (self.currentLyrics.length ? self.currentLyrics : @"暂无歌词");
+    self.elapsedLabel.text = [self formattedTime:self.isSeeking ? self.displayedSeekElapsed : nowPlaying.elapsed];
+    self.durationLabel.text = [self formattedTime:nowPlaying.duration];
     self.compactStatusText = [NSString stringWithFormat:@"%@ %@ ♨%.0f° CPU%.0f%%", self.timeLabel.text ?: @"--:--", self.batteryLabel.text ?: @"—", isfinite(temperature)?temperature:0.0, isfinite(cpu)?cpu:0.0];
-    self.compactTrackText = title.length ? (artist.length ? [NSString stringWithFormat:@"%@ · %@",title,artist] : title) : (showPlaying?@"正在播放":@"未播放");
+    self.compactTrackText = title.length ? title : (showPlaying ? @"正在播放" : @"未播放");
     if(!self.isSeeking&&nowPlaying.duration>0)self.progressSlider.value=(float)MIN(1.0,MAX(0.0,nowPlaying.elapsed/nowPlaying.duration));
     self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
 
@@ -717,6 +937,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 }
 
 - (void)handleCardLongPress:(UILongPressGestureRecognizer *)recognizer {
+    if (!self.longPressControls) return;
     if (recognizer.state == UIGestureRecognizerStateBegan) {
         if (self.vibrationFeedbackEnabled) {
             UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
@@ -743,6 +964,11 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     [self stopUpdating];
     if (self.onClose) self.onClose();
     else [self removeFromSuperview];
+}
+
+- (void)toggleExpandedTapped {
+    [self tapHaptic];
+    [self setExpanded:!self.isExpanded animated:YES];
 }
 
 - (void)tapHaptic {
@@ -780,6 +1006,9 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 - (void)stopUpdating {
     [self.timer invalidate];
     self.timer = nil;
+    self.lyricsRequestGeneration += 1;
+    [self.lyricsTask cancel];
+    self.lyricsTask = nil;
     [PGNowPlaying.sharedInstance stopMonitoring];
 }
 

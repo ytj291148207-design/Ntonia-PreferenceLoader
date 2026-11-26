@@ -73,6 +73,14 @@
 仍需在 iPhone 14 Pro Max / iOS 16.3.1 / Dopamine RootHide 上实机验证，日志在
 `/var/mobile/Media/PerfectGrabber.log`（`[PG] present in ...` / `[PG] docked in ...` / `[PG] hide`）。
 
+## 1.1-60 原生面板内嵌实验包（仅候选测试）
+
+此改动依据用户选择，尝试把卡片放进原生面板窗口的内容视图树，不创建 alert-level 浮窗。下拉面板收起时卡片随之移除；该挂载点仍未在 iPhone 14 Pro Max / iOS 16.3.1 真机核实，可能被 SpringBoard 自身布局重排或裁剪，也可能并非抓取器私有面板窗口。展开高度滑块受到面板可用高度约束。
+
+加入独立展开高度/字体粗细设置；长按展开可选；箭头按钮手动展开/收起；歌词通过 LRCLIB 网络查询，默认关闭，仅发送曲名/歌手，且尝试在关闭、切歌、面板收起时取消请求。歌词匹配、音乐 App 的 seek/按钮状态需真机验证。歌词服务返回歌词文本时应遵守其许可。
+
+**实验候选，不是已验证修复版。**构建失败或设置页/面板异常时请先卸载，不要用旧包覆盖安装；先确认目标设备回滚路径。未安装/测试到 iPhone 14 Pro Max / iOS 16.3.1 / Dopamine RootHide。
+
 ## 打包
 
 macOS GitHub Actions 出 rootless 与 roothide 两种包，命令不变：

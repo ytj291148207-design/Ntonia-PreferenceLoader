@@ -12,6 +12,10 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
 @property (nonatomic, readwrite) UIColor *textColor;
 @property (nonatomic, readwrite) CGFloat cardWidth;
 @property (nonatomic, readwrite) CGFloat cardScale;
+@property (nonatomic, readwrite) CGFloat cardHeightScale;
+@property (nonatomic, readwrite) CGFloat fontWeight;
+@property (nonatomic, readwrite) BOOL longPressControls;
+@property (nonatomic, readwrite) BOOL lyricsLookupEnabled;
 @property (nonatomic, readwrite) CGFloat cardBlur;
 @property (nonatomic, readwrite) CGFloat cardOpacity;
 @property (nonatomic, readwrite) CGFloat cardCornerRadius;
@@ -63,8 +67,12 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
     self.cardWidth = MAX(300.0, MIN(800.0,
                       [[self valueForKey:@"CardWidth" fallback:@460.0] doubleValue]));
     self.cardScale = MAX(0.7, MIN(1.6, [[self valueForKey:@"CardScale" fallback:@1.0] doubleValue]));
+    self.cardHeightScale = MAX(0.70, MIN(1.60, [[self valueForKey:@"CardHeightScale" fallback:@1.0] doubleValue]));
+    self.fontWeight = MAX(0.0, MIN(1.0, [[self valueForKey:@"FontWeight" fallback:@0.6] doubleValue]));
+    self.longPressControls = [[self valueForKey:@"LongPressControls" fallback:@YES] boolValue];
+    self.lyricsLookupEnabled = [[self valueForKey:@"LyricsLookupEnabled" fallback:@NO] boolValue];
     self.cardBlur = MAX(0.0, MIN(1.0, [[self valueForKey:@"CardBlur" fallback:@0.82] doubleValue]));
-    self.cardOpacity = MAX(0.05, MIN(1.0, [[self valueForKey:@"CardOpacity" fallback:@0.78] doubleValue]));
+    self.cardOpacity = MAX(0.05, MIN(1.0, [[self valueForKey:@"CardOpacity" fallback:@0.32] doubleValue]));
     self.cardCornerRadius = MAX(0.0, MIN(48.0,
                             [[self valueForKey:@"CardCornerRadius" fallback:@34.0] doubleValue]));
     self.cornerStyle = MAX(0, MIN(3, [[self valueForKey:@"CornerStyle" fallback:@0] integerValue]));

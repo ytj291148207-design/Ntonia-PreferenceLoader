@@ -72,20 +72,23 @@ static void PGWriteValue(NSString *key, id value) {
     if (_specifiers) return _specifiers;
     NSMutableArray *items = [NSMutableArray array];
     PSSpecifier *main = [PSSpecifier groupSpecifierWithName:@"顶部播放器卡片"];
-    [main setProperty:@"从顶部下拉触发。卡片固定在顶部；时间、电量、温度和 CPU 居中显示。长按展开播放控制和进度条，松手不会收回；只有点右上角 × 才关闭。"
-                forKey:PSFooterTextGroupKey];
+    [main setProperty:@"从顶部下拉呼出。时间、电量、温度与 CPU 常显；收起态显示曲目信息，长按在同一卡片中展开歌词/进度/控制。右上箭头手动收起/展开；面板收起时卡片随系统消失。联网查歌词默认关闭，开启后只上传歌名/歌手给 LRCLIB。" forKey:PSFooterTextGroupKey];
     [items addObject:main];
     [items addObject:[self preferenceNamed:@"启用卡片" key:@"EnabledPerfectGrabber" defaultValue:@NO cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"震动反馈" key:@"VibrationFeedback" defaultValue:@YES cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"使用12小时制" key:@"Disable24H" defaultValue:@NO cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"显示充电图标" key:@"ChargingIcon" defaultValue:@YES cell:PSSwitchCell]];
+    [items addObject:[self preferenceNamed:@"长按显示播放控制" key:@"LongPressControls" defaultValue:@YES cell:PSSwitchCell]];
+    [items addObject:[self preferenceNamed:@"联网查询歌词（只发送歌名/歌手；关闭则不联网）" key:@"LyricsLookupEnabled" defaultValue:@NO cell:PSSwitchCell]];
 
     NSArray<NSDictionary *> *sliderOptions = @[
         @{@"name":@"卡片宽度", @"key":@"CardWidth", @"value":@460.0, @"min":@300.0, @"max":@800.0, @"help":@"调整顶部卡片横向宽度；超出屏幕时自动限制在安全范围内。"},
-        @{@"name":@"卡片缩放", @"key":@"CardScale", @"value":@1.0, @"min":@0.7, @"max":@1.6, @"help":@"同步调整卡片内容、图标和高度。"},
+        @{@"name":@"卡片整体大小", @"key":@"CardScale", @"value":@1.0, @"min":@0.7, @"max":@1.6, @"help":@"同步缩放卡片内容、图标及收起态尺寸。"},
+        @{@"name":@"展开态卡片高度", @"key":@"CardHeightScale", @"value":@1.0, @"min":@0.7, @"max":@1.6, @"help":@"单独调整展开播放区高度。系统下拉面板空间有限，设备上可能裁剪。"},
         @{@"name":@"字体大小", @"key":@"FontSize", @"value":@15.0, @"min":@9.0, @"max":@24.0, @"help":@"调整时间、状态和歌曲信息的文字大小。"},
+        @{@"name":@"字体粗细", @"key":@"FontWeight", @"value":@0.6, @"min":@0.0, @"max":@1.0, @"help":@"从纤细到粗体；影响时间、状态和曲目信息。"},
         @{@"name":@"毛玻璃强度", @"key":@"CardBlur", @"value":@0.82, @"min":@0.0, @"max":@1.0, @"help":@"调整卡片背后模糊效果的强弱；数值越大越明显。"},
-        @{@"name":@"背景透明度", @"key":@"CardOpacity", @"value":@0.78, @"min":@0.05, @"max":@1.0, @"help":@"调整卡片深色叠底的不透明程度；数值越大底色越实。"},
+        @{@"name":@"背景透明度", @"key":@"CardOpacity", @"value":@0.32, @"min":@0.05, @"max":@1.0, @"help":@"调整卡片毛玻璃上方深色叠底的不透明程度；数值越大底色越实。"},
         @{@"name":@"卡片圆角", @"key":@"CardCornerRadius", @"value":@34.0, @"min":@0.0, @"max":@48.0, @"help":@"调整卡片四角的圆弧半径；超过卡片高度一半时会自动按一半显示（收起态因此看是胶囊）。"}
     ];
     for (NSDictionary *option in sliderOptions) {
@@ -263,7 +266,7 @@ static const void *PGSliderLastStepKey = &PGSliderLastStepKey;
 
 - (void)onResetSettings {
     NSArray *keys = @[@"EnabledPerfectGrabber", @"VibrationFeedback", @"Disable24H", @"ChargingIcon",
-                      @"FontSize", @"TextColor", @"CardWidth", @"CardScale",
+                      @"LongPressControls", @"LyricsLookupEnabled", @"FontSize", @"FontWeight", @"TextColor", @"CardWidth", @"CardScale", @"CardHeightScale",
                       @"CardBlur", @"CardOpacity", @"CardCornerRadius", @"CornerStyle", @"BackgroundMode"];
     for (NSString *key in keys) {
         CFPreferencesSetAppValue((__bridge CFStringRef)key, NULL, (__bridge CFStringRef)PGDomain);
