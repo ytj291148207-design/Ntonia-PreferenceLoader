@@ -5,7 +5,6 @@ on:
     paths:
       - 'GrabberCardRootHide/**'
       - '.github/workflows/grabbercard-roothide.yml'
-      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 permissions:
@@ -20,26 +19,22 @@ jobs:
       - name: Install build tools
         run: |
           brew install dpkg xz
-          mkdir -p "$HOME/theos/bin" "$HOME/theos/sdks"
+          mkdir -p "$HOME/theos/bin"
           if [ "$(uname -m)" = arm64 ]; then A=ldid_macosx_arm64; else A=ldid_macosx_x86_64; fi
           curl -fsSL --retry 3 --retry-delay 3 "https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/$A" -o "$HOME/theos/bin/ldid"
           chmod +x "$HOME/theos/bin/ldid"
-      - name: Fetch iPhoneOS 16.5 SDK
+      - name: Verify Apple iOS SDK
         run: |
-          cd "$HOME/theos/sdks"
-          URL="https://github.com/theos/sdks/releases/download/master/iPhoneOS16.5.sdk.tar.xz"
-          if ! curl -fsIL --retry 2 -m 30 "$URL" >/dev/null; then
-            URL="$(curl -fsSL https://api.github.com/repos/theos/sdks/releases/latest | grep -o 'https://[^\"]*iPhoneOS16\.5\.sdk\.tar\.xz' | head -n 1)"
-          fi
-          curl -fsSL --retry 3 --retry-delay 5 -o sdk.tar.xz "$URL"
-          tar -xf sdk.tar.xz
-          rm sdk.tar.xz
+          xcode-select -p
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --find clang
+          xcrun --find lipo
       - name: Build and statically verify RootHide deb
         run: |
           chmod +x GrabberCardRootHide/GrabberCard/build-roothide.sh
           GrabberCardRootHide/GrabberCard/build-roothide.sh
           mkdir -p dist
-          cp GrabberCardRootHide/dist/*.deb dist/
+          cp GrabberCardRootHide/GrabberCard/dist/*.deb dist/
           shasum -a 256 dist/*.deb
       - uses: actions/upload-artifact@v4
         with:

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SRC/.." && pwd)"
-SDK="${SDK:-$HOME/theos/sdks/iPhoneOS16.5.sdk}"
+SDK="${SDK:-$(xcrun --sdk iphoneos --show-sdk-path)}"
 OUT="$ROOT/build"
 PKG="$ROOT/packages"
 DIST="$ROOT/dist"
@@ -27,7 +27,7 @@ link_dylib() {
   local triple="$1" output="$2"; shift 2
   "$CC" -target "$triple" -isysroot "$SDK" -Wl,-undefined,dynamic_lookup -dynamiclib \
     -o "$output" "$@" -framework UIKit -framework Foundation -framework AudioToolbox \
-    -framework IOKit -Wl,-install_name,/var/jb/Library/MobileSubstrate/DynamicLibraries/GrabberCard.dylib
+    -framework IOKit -Wl,-install_name,@loader_path/.jbroot/Library/MobileSubstrate/DynamicLibraries/GrabberCard.dylib
 }
 link_bundle() {
   local triple="$1" output="$2"; shift 2
