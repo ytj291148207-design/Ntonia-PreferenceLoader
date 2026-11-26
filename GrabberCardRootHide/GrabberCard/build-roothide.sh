@@ -49,8 +49,8 @@ done
 
 $LIPO -create "$OUT/GrabberCard-arm64.dylib" "$OUT/GrabberCard-arm64e.dylib" -output "$OUT/GrabberCard.dylib"
 $LIPO -create "$OUT/GrabberCardSettings-arm64" "$OUT/GrabberCardSettings-arm64e" -output "$OUT/GrabberCardSettings"
-$LIPO -verify_arch arm64 arm64e "$OUT/GrabberCard.dylib"
-$LIPO -verify_arch arm64 arm64e "$OUT/GrabberCardSettings"
+$LIPO "$OUT/GrabberCard.dylib" -verify_arch arm64 arm64e
+$LIPO "$OUT/GrabberCardSettings" -verify_arch arm64 arm64e
 "$LDID" -S "$OUT/GrabberCard.dylib"
 "$LDID" -S "$OUT/GrabberCardSettings"
 
@@ -103,13 +103,13 @@ p.write_text(s)
 PY
 dpkg-deb -Zgzip --root-owner-group -b "$ROOTPKG" "$DIST/GrabberCard_1.0.3+roothide_iphoneos-arm64e.deb"
 
-$LIPO -verify_arch arm64 arm64e "$OUT/GrabberCard.dylib"
-$LIPO -verify_arch arm64 arm64e "$OUT/GrabberCardSettings"
+$LIPO "$OUT/GrabberCard.dylib" -verify_arch arm64 arm64e
+$LIPO "$OUT/GrabberCardSettings" -verify_arch arm64 arm64e
 mkdir -p "$WORK/verify"
 dpkg-deb -x "$DIST/GrabberCard_1.0.3+roothide_iphoneos-arm64e.deb" "$WORK/verify"
 V="$WORK/verify"
-$LIPO -verify_arch arm64 arm64e "$V/Library/MobileSubstrate/DynamicLibraries/GrabberCard.dylib"
-$LIPO -verify_arch arm64 arm64e "$V/Library/PreferenceBundles/GrabberCardSettings.bundle/GrabberCardSettings"
+$LIPO "$V/Library/MobileSubstrate/DynamicLibraries/GrabberCard.dylib" -verify_arch arm64 arm64e
+$LIPO "$V/Library/PreferenceBundles/GrabberCardSettings.bundle/GrabberCardSettings" -verify_arch arm64 arm64e
 python3 - "$V/Library/MobileSubstrate/DynamicLibraries/GrabberCard.dylib" "$V/Library/PreferenceBundles/GrabberCardSettings.bundle/GrabberCardSettings" <<'PY'
 import subprocess,sys
 for p in sys.argv[1:]:
