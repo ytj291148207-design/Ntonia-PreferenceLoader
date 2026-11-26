@@ -1,8 +1,5 @@
 #import "PerfectGrabberSettingsController.h"
 #import <Preferences/PSSpecifier.h>
-#import <Preferences/PSSliderTableCell.h>
-#import <Preferences/PSControlTableCell.h>
-#import <AudioToolbox/AudioToolbox.h>
 #import <math.h>
 #import <spawn.h>
 
@@ -15,10 +12,6 @@ static id PGReadValue(NSString *key, id fallback) {
                                                         (__bridge CFStringRef)PGDomain);
     return CFBridgingRelease(value) ?: fallback;
 }
-static BOOL PGSliderHapticsEnabled(void) {
-    return [PGReadValue(@"SliderHaptics", @YES) boolValue];
-}
-
 static void PGWriteValue(NSString *key, id value) {
     CFPreferencesSetAppValue((__bridge CFStringRef)key,
                              (__bridge CFPropertyListRef)value,
@@ -30,7 +23,6 @@ static void PGWriteValue(NSString *key, id value) {
 
 @interface PerfectGrabberSettingsController () <UIColorPickerViewControllerDelegate>
 @property (nonatomic, copy) NSString *activeColorKey;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *lastSliderSteps;
 @end
 
 @implementation PerfectGrabberSettingsController
@@ -67,7 +59,6 @@ static void PGWriteValue(NSString *key, id value) {
     [items addObject:main];
     [items addObject:[self preferenceNamed:@"启用卡片" key:@"EnabledPerfectGrabber" defaultValue:@NO cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"震动反馈" key:@"VibrationFeedback" defaultValue:@YES cell:PSSwitchCell]];
-    [items addObject:[self preferenceNamed:@"滑块逐格震动" key:@"SliderHaptics" defaultValue:@YES cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"使用12小时制" key:@"Disable24H" defaultValue:@NO cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"显示充电图标" key:@"ChargingIcon" defaultValue:@YES cell:PSSwitchCell]];
 
@@ -86,10 +77,6 @@ static void PGWriteValue(NSString *key, id value) {
         PSSpecifier *slider = [self preferenceNamed:option[@"name"] key:option[@"key"] defaultValue:option[@"value"] cell:PSSliderCell];
         [slider setProperty:option[@"min"] forKey:PSControlMinimumKey];
         [slider setProperty:option[@"max"] forKey:PSControlMaximumKey];
-        [slider setProperty:@YES forKey:PSSliderIsSegmented];
-        [slider setProperty:@10 forKey:PSSliderSegmentCount];
-        [slider setProperty:@YES forKey:@"showValue"];
-        [slider setProperty:option[@"key"] forKey:@"PGHapticKey"];
         [items addObject:slider];
     }
     [items addObject:[self buttonNamed:@"文字颜色" action:@selector(chooseTextColor)]];
@@ -101,32 +88,6 @@ static void PGWriteValue(NSString *key, id value) {
     [items addObject:footer];
     _specifiers = items;
     return _specifiers;
-}
-
-- (void)tableView:(UITableView *)tableView willDisplayCell:(PSTableCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
-    [super tableView:tableView willDisplayCell:cell forRowAtIndexPath:indexPath];
-    if (![cell isKindOfClass:PSSliderTableCell.class]) return;
-    NSString *key = [cell.specifier propertyForKey:@"PGHapticKey"];
-    if (!key.length) return;
-    PSControlTableCell *controlCell = (PSControlTableCell *)cell;
-    UISlider *slider = [controlCell.control isKindOfClass:UISlider.class] ? (UISlider *)controlCell.control : nil;
-    if (!slider) return;
-    slider.accessibilityIdentifier = key;
-    slider.tag = MAX(1, [[cell.specifier propertyForKey:PSSliderSegmentCount] integerValue]);
-    [slider removeTarget:self action:@selector(sliderValueChanged:) forControlEvents:UIControlEventValueChanged];
-    [slider addTarget:self action:@selector(sliderValueChanged:) forControlEvents:UIControlEventValueChanged];
-}
-
-- (void)sliderValueChanged:(UISlider *)slider {
-    if (!PGSliderHapticsEnabled()) return;
-    NSString *key = slider.accessibilityIdentifier ?: @"slider";
-    NSInteger step = lround((slider.value-slider.minimumValue)/MAX(0.001f,slider.maximumValue-slider.minimumValue)*MAX(1,slider.tag));
-    NSNumber *previous = self.lastSliderSteps[key];
-    if (previous && previous.integerValue == step) return;
-    if (!self.lastSliderSteps) self.lastSliderSteps = [NSMutableDictionary dictionary];
-    self.lastSliderSteps[key] = @(step);
-    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [feedback prepare]; [feedback impactOccurred];
 }
 
 - (id)readPreferenceValue:(PSSpecifier *)specifier {
@@ -199,7 +160,7 @@ static void PGWriteValue(NSString *key, id value) {
 }
 
 - (void)onResetSettings {
-    NSArray *keys = @[@"EnabledPerfectGrabber", @"VibrationFeedback", @"SliderHaptics", @"Disable24H", @"ChargingIcon",
+    NSArray *keys = @[@"EnabledPerfectGrabber", @"VibrationFeedback", @"Disable24H", @"ChargingIcon",
                       @"FontSize", @"TextColor", @"CardWidth", @"CardScale",
                       @"CardBlur", @"CardOpacity", @"CardCornerRadius"];
     for (NSString *key in keys) {
