@@ -3,6 +3,7 @@
 #import "PGNowPlaying.h"
 #import "PerfectGrabberPreferences.h"
 #import <QuartzCore/QuartzCore.h>
+#import <AudioToolbox/AudioToolbox.h>
 #import <math.h>
 
 @interface SBUIController : NSObject
@@ -99,7 +100,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     _tintView.userInteractionEnabled = NO;
     _tintView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:_backgroundOpacity];
     [self addSubview:_tintView];
-    [self insertSubview:_gaussianBlurBackdrop belowSubview:_tintView];
+    [self insertSubview:_gaussianBlurBackdrop belowSubview:_blurView];
 
     _timeLabel = [self newLabelWithWeight:UIFontWeightSemibold alignment:NSTextAlignmentLeft];
     _timeLabel.adjustsFontSizeToFitWidth = YES;
