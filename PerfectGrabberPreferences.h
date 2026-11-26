@@ -10,6 +10,7 @@ FOUNDATION_EXPORT NSString *const PGPreferencesChangedNotification;
 
 @property (nonatomic, readonly, getter=isEnabled) BOOL enabled;
 @property (nonatomic, readonly) BOOL vibrationFeedback;
+@property (nonatomic, readonly) BOOL sliderHaptics;
 @property (nonatomic, readonly) BOOL disable24Hour;
 @property (nonatomic, readonly) BOOL chargingIcon;
 @property (nonatomic, readonly) CGFloat fontSize;

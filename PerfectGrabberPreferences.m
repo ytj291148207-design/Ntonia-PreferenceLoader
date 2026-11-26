@@ -6,6 +6,7 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
 @interface PerfectGrabberPreferences ()
 @property (nonatomic, readwrite, getter=isEnabled) BOOL enabled;
 @property (nonatomic, readwrite) BOOL vibrationFeedback;
+@property (nonatomic, readwrite) BOOL sliderHaptics;
 @property (nonatomic, readwrite) BOOL disable24Hour;
 @property (nonatomic, readwrite) BOOL chargingIcon;
 @property (nonatomic, readwrite) CGFloat fontSize;
@@ -53,6 +54,7 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
 - (void)reload {
     self.enabled = [[self valueForKey:@"EnabledPerfectGrabber" fallback:@NO] boolValue];
     self.vibrationFeedback = [[self valueForKey:@"VibrationFeedback" fallback:@YES] boolValue];
+    self.sliderHaptics = [[self valueForKey:@"SliderHaptics" fallback:@YES] boolValue];
     self.disable24Hour = [[self valueForKey:@"Disable24H" fallback:@NO] boolValue];
     self.chargingIcon = [[self valueForKey:@"ChargingIcon" fallback:@YES] boolValue];
     self.fontSize = MAX(8.0, MIN(28.0, [[self valueForKey:@"FontSize" fallback:@15.0] doubleValue]));

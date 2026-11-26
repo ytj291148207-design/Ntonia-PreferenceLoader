@@ -17,6 +17,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Called when the close button is tapped.
 @property (nonatomic, copy, nullable) void (^onClose)(void);
+@property (nonatomic, copy, nullable) void (^onLongPressStateChange)(BOOL active);
+@property (nonatomic, assign) BOOL compactMode;
+@property (nonatomic, assign) BOOL deferNativeGrabberDismissal;
+@property (nonatomic, readonly, getter=isExpanded) BOOL expanded;
 /// Called when expansion changes so the edge host can resize its window.
 @property (nonatomic, copy, nullable) void (^onHeightChange)(CGFloat height);
 - (void)setExpanded:(BOOL)expanded animated:(BOOL)animated;

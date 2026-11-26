@@ -39,6 +39,11 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @property (nonatomic, assign) BOOL hasPendingPlaybackState;
 @property (nonatomic, assign) BOOL pendingPlaybackState;
 @property (nonatomic, strong) NSDate *pendingPlaybackDeadline;
+@property (nonatomic, strong) UISlider *progressSlider;
+@property (nonatomic, assign) BOOL isSeeking;
+@property (nonatomic, assign) double displayedSeekElapsed;
+@property (nonatomic, copy) NSString *compactStatusText;
+@property (nonatomic, copy) NSString *compactTrackText;
 - (UILabel *)newLabelWithWeight:(UIFontWeight)weight alignment:(NSTextAlignment)alignment;
 - (UIButton *)buttonWithSymbol:(NSString *)symbol fallback:(NSString *)fallback accessibility:(NSString *)accessibility;
 - (void)updateContents;
@@ -51,6 +56,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @synthesize backgroundOpacity = _backgroundOpacity;
 @synthesize cornerRadius = _cornerRadius;
 @synthesize expanded = _expanded;
+@synthesize compactMode = _compactMode;
+@synthesize deferNativeGrabberDismissal = _deferNativeGrabberDismissal;
 
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
@@ -130,6 +137,15 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     _lyricsLabel.textColor = [UIColor colorWithWhite:1.0 alpha:0.66];
     _lyricsLabel.text = @"暂无歌词";
     [self addSubview:_lyricsLabel];
+    _progressSlider = [UISlider new];
+    _progressSlider.minimumValue=0; _progressSlider.maximumValue=1;
+    _progressSlider.minimumTrackTintColor=UIColor.whiteColor;
+    _progressSlider.maximumTrackTintColor=[UIColor colorWithWhite:1 alpha:0.3];
+    _progressSlider.thumbTintColor=UIColor.whiteColor; _progressSlider.hidden=YES;
+    [_progressSlider addTarget:self action:@selector(progressBegan:) forControlEvents:UIControlEventTouchDown];
+    [_progressSlider addTarget:self action:@selector(progressChanged:) forControlEvents:UIControlEventValueChanged];
+    [_progressSlider addTarget:self action:@selector(progressEnded:) forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
+    [self addSubview:_progressSlider];
 
     _previousButton = [self buttonWithSymbol:@"backward.end.fill" fallback:@"|◀" accessibility:@"上一首"];
     [_previousButton addTarget:self action:@selector(previousTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -211,12 +227,15 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 }
 
 - (BOOL)isExpanded { return _expanded; }
+- (BOOL)isCompactMode { return _compactMode; }
+- (void)setCompactMode:(BOOL)value { _compactMode=value; [self setNeedsLayout]; }
+- (BOOL)deferNativeGrabberDismissal { return _deferNativeGrabberDismissal; }
+- (void)setDeferNativeGrabberDismissal:(BOOL)value { _deferNativeGrabberDismissal=value; }
 
 - (void)setExpanded:(BOOL)expanded animated:(BOOL)animated {
     if (_expanded == expanded) return;
     _expanded = expanded;
     CGFloat targetHeight = [self heightForCurrentWidth];
-    if (self.onHeightChange) self.onHeightChange(targetHeight);
 
     void (^layoutBlock)(void) = ^{
         if (CGRectGetWidth(self.bounds) > 0.0 && CGRectGetHeight(self.bounds) > 0.0) {
@@ -228,14 +247,18 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         [self layoutIfNeeded];
     };
     if (animated) {
-        [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut animations:layoutBlock completion:nil];
+        [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut animations:layoutBlock completion:^(BOOL finished) {
+            if (self.onHeightChange) self.onHeightChange(targetHeight);
+        }];
     } else {
         layoutBlock();
+        if (self.onHeightChange) self.onHeightChange(targetHeight);
     }
 }
 
 - (CGFloat)heightForWidth:(CGFloat)width {
     CGFloat scale = PGClamp(self.cardScale, 0.65, 1.50);
+    if (self.compactMode) return (self.isExpanded ? 104.0 : 44.0) * scale;
     // Room for a readable status row, a 60pt artwork row, and expanded control buttons.
     return (112.0 + (self.isExpanded ? 64.0 : 0.0)) * scale;
 }
@@ -310,6 +333,44 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.blurView.frame = self.bounds;
     self.tintView.frame = self.bounds;
 
+    if (self.compactMode) {
+        CGFloat pad=8.0*scale, close=20.0*scale, row=17.0*scale;
+        CGFloat statusWidth=MAX(0.0,width-pad*2.0-close-3.0*scale);
+        if (!self.isExpanded) {
+            CGFloat tw=statusWidth*0.20,bw=statusWidth*0.23,hw=statusWidth*0.22;
+            self.timeLabel.frame=CGRectMake(pad,0,tw,row);
+            self.batteryLabel.frame=CGRectMake(pad+tw,0,bw,row);
+            self.temperatureLabel.frame=CGRectMake(pad+tw+bw,0,hw,row);
+            self.cpuLabel.frame=CGRectMake(pad+tw+bw+hw,0,statusWidth-tw-bw-hw,row);
+            self.closeButton.frame=CGRectMake(width-pad-close,0,close,close); self.closeButton.hidden=NO;
+            for (UILabel *label in @[_timeLabel,_batteryLabel,_temperatureLabel,_cpuLabel]) { label.font=[self configuredFontWithSize:9.0 weight:UIFontWeightSemibold]; label.adjustsFontSizeToFitWidth=YES; label.minimumScaleFactor=0.35; label.textAlignment=NSTextAlignmentCenter; }
+            CGFloat y=19.0*scale, art=18.0*scale;
+            self.artworkView.frame=CGRectMake(pad,y,art,art); self.artworkView.layer.cornerRadius=4.0*scale; self.artworkFallbackLabel.frame=self.artworkView.frame;
+            CGFloat tx=CGRectGetMaxX(self.artworkView.frame)+5.0*scale;
+            self.titleLabel.frame=CGRectMake(tx,y,MAX(0.0,width-pad-tx),art);
+            self.titleLabel.font=[self configuredFontWithSize:9.0 weight:UIFontWeightSemibold]; self.titleLabel.adjustsFontSizeToFitWidth=YES; self.titleLabel.minimumScaleFactor=0.5; self.titleLabel.text=self.compactTrackText.length?self.compactTrackText:self.titleLabel.text;
+            self.artistLabel.frame=CGRectZero; self.lyricsLabel.frame=CGRectZero;
+            self.artworkView.hidden=NO; self.artworkFallbackLabel.hidden=(self.artworkView.image!=nil); self.titleLabel.hidden=NO; self.artistLabel.hidden=YES; self.lyricsLabel.hidden=YES;
+            self.progressSlider.hidden=YES; self.progressSlider.frame=CGRectZero;
+            self.previousButton.hidden=YES; self.playPauseButton.hidden=YES; self.nextButton.hidden=YES;
+            return;
+        }
+        CGFloat tw=statusWidth*0.18,bw=statusWidth*0.21,hw=statusWidth*0.20;
+        self.timeLabel.frame=CGRectMake(pad,2.0*scale,tw,row); self.batteryLabel.frame=CGRectMake(pad+tw,2.0*scale,bw,row);
+        self.temperatureLabel.frame=CGRectMake(pad+tw+bw,2.0*scale,hw,row); self.cpuLabel.frame=CGRectMake(pad+tw+bw+hw,2.0*scale,statusWidth-tw-bw-hw,row);
+        self.closeButton.frame=CGRectMake(width-pad-close,2.0*scale,close,close); self.closeButton.hidden=NO;
+        for(UILabel*label in @[_timeLabel,_batteryLabel,_temperatureLabel,_cpuLabel]){label.font=[self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];label.adjustsFontSizeToFitWidth=YES;label.minimumScaleFactor=0.35;label.textAlignment=NSTextAlignmentCenter;}
+        CGFloat y=24.0*scale,art=34.0*scale;self.artworkView.frame=CGRectMake(pad,y,art,art);self.artworkView.layer.cornerRadius=6.0*scale;self.artworkFallbackLabel.frame=self.artworkView.frame;
+        CGFloat tx=CGRectGetMaxX(self.artworkView.frame)+7.0*scale,controls=88.0*scale,textW=MAX(20.0,width-pad-tx-controls-4.0*scale);
+        self.titleLabel.frame=CGRectMake(tx,y,textW,18.0*scale);self.artistLabel.frame=CGRectMake(tx,y+18.0*scale,textW,15.0*scale);self.lyricsLabel.frame=CGRectZero;
+        self.artworkView.hidden=NO;self.artworkFallbackLabel.hidden=(self.artworkView.image!=nil);self.titleLabel.hidden=NO;self.artistLabel.hidden=NO;self.lyricsLabel.hidden=YES;
+        CGFloat bs=24.0*scale,gap=4.0*scale,x=width-pad-(bs*3.0+gap*2.0),cy=y+4.0*scale;
+        self.previousButton.frame=CGRectMake(x,cy,bs,bs);self.playPauseButton.frame=CGRectMake(x+bs+gap,cy,bs,bs);self.nextButton.frame=CGRectMake(x+(bs+gap)*2.0,cy,bs,bs);
+        self.previousButton.hidden=NO;self.playPauseButton.hidden=NO;self.nextButton.hidden=NO;
+        if(PGNowPlaying.sharedInstance.duration>0.0){self.progressSlider.frame=CGRectMake(tx,height-18.0*scale,width-tx-pad,14.0*scale);self.progressSlider.hidden=NO;}else{self.progressSlider.frame=CGRectZero;self.progressSlider.hidden=YES;}
+        return;
+    }
+
     CGFloat pad = 12.0 * scale;
     CGFloat top = 7.0 * scale;
     CGFloat statusHeight = 27.0 * scale;
@@ -365,6 +426,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.titleLabel.frame = CGRectMake(textX, textY, textWidth, titleHeight);
     self.artistLabel.frame = CGRectMake(textX, textY + titleHeight, textWidth, artistHeight);
     self.lyricsLabel.frame = CGRectMake(textX, textY + titleHeight + artistHeight, textWidth, lyricsHeight);
+    if(self.compactMode&&self.isExpanded&&PGNowPlaying.sharedInstance.duration>0){CGFloat sx=textX,sy=height-19.0*scale;self.progressSlider.frame=CGRectMake(sx,sy,MAX(40.0,width-sx-pad),15.0*scale);self.progressSlider.hidden=NO;}else{self.progressSlider.frame=CGRectZero;self.progressSlider.hidden=YES;}
 
     BOOL controlsVisible = self.isExpanded;
     self.previousButton.hidden = !controlsVisible;
@@ -437,6 +499,9 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.titleLabel.text = title.length ? title : (showPlaying ? @"正在播放" : @"未播放");
     self.artistLabel.text = artist.length ? artist : @"—";
     self.lyricsLabel.text = @"暂无歌词";
+    self.compactStatusText = [NSString stringWithFormat:@"%@ %@ ♨%.0f° CPU%.0f%%", self.timeLabel.text ?: @"--:--", self.batteryLabel.text ?: @"—", isfinite(temperature)?temperature:0.0, isfinite(cpu)?cpu:0.0];
+    self.compactTrackText = title.length ? (artist.length ? [NSString stringWithFormat:@"%@ · %@",title,artist] : title) : (showPlaying?@"正在播放":@"未播放");
+    if(!self.isSeeking&&nowPlaying.duration>0)self.progressSlider.value=(float)MIN(1.0,MAX(0.0,nowPlaying.elapsed/nowPlaying.duration));
     self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
 
     if (showPlaying) {
@@ -453,15 +518,26 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
 #pragma mark - Gestures and controls
 
+- (void)progressBegan:(UISlider *)slider { self.isSeeking=YES; }
+- (void)progressChanged:(UISlider *)slider { self.displayedSeekElapsed=slider.value*PGNowPlaying.sharedInstance.duration; }
+- (void)progressEnded:(UISlider *)slider { [PGNowPlaying.sharedInstance seekToElapsedTime:slider.value*PGNowPlaying.sharedInstance.duration];self.isSeeking=NO; }
+
 - (void)handleCardLongPress:(UILongPressGestureRecognizer *)recognizer {
     if (recognizer.state == UIGestureRecognizerStateBegan) {
+        if (self.onLongPressStateChange) self.onLongPressStateChange(YES);
         [self setExpanded:!self.isExpanded animated:YES];
+    } else if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled || recognizer.state == UIGestureRecognizerStateFailed) {
+        if (self.onLongPressStateChange) self.onLongPressStateChange(NO);
     }
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
-    // Keep button taps responsive while the card-wide hold recognizer is installed.
     return NO;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    UIView *v=touch.view;
+    while(v&&v!=self){if([v isKindOfClass:UIControl.class])return NO;v=v.superview;}
+    return YES;
 }
 
 - (void)closeTapped {
@@ -470,9 +546,14 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     else [self removeFromSuperview];
 }
 
-- (void)previousTapped { [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandPrevious]; }
+- (void)tapHaptic {
+    if (!PerfectGrabberPreferences.sharedPreferences.vibrationFeedback) return;
+    UIImpactFeedbackGenerator *g=[[UIImpactFeedbackGenerator alloc]initWithStyle:UIImpactFeedbackStyleLight];[g prepare];[g impactOccurred];
+}
+- (void)previousTapped { [self tapHaptic]; [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandPrevious]; }
 
 - (void)playPauseTapped {
+    [self tapHaptic];
     BOOL currentlyPlaying = self.hasPendingPlaybackState ? self.pendingPlaybackState : PGNowPlaying.sharedInstance.isPlaying;
     self.pendingPlaybackState = !currentlyPlaying;
     self.hasPendingPlaybackState = YES;
@@ -485,7 +566,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     [PGNowPlaying.sharedInstance sendCommand:self.pendingPlaybackState ? PGMediaCommandPlay : PGMediaCommandPause];
 }
 
-- (void)nextTapped { [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandNext]; }
+- (void)nextTapped { [self tapHaptic]; [PGNowPlaying.sharedInstance sendCommand:PGMediaCommandNext]; }
 
 #pragma mark - Monitoring
 

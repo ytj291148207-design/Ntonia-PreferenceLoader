@@ -39,6 +39,7 @@ typedef NS_ENUM(NSInteger, PGMediaCommand) {
 - (void)stopMonitoring;
 - (void)refresh;
 - (void)sendCommand:(PGMediaCommand)command;
+- (void)seekToElapsedTime:(double)seconds;
 
 @end
 

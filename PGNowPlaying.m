@@ -14,6 +14,7 @@ static void (*PGMRGetIsPlaying)(dispatch_queue_t, void (^)(Boolean));
 static void (*PGMRGetClient)(dispatch_queue_t, void (^)(id));
 static void (*PGMRGetPID)(dispatch_queue_t, void (^)(int));
 static Boolean (*PGMRSendCommand)(int, CFDictionaryRef);
+static void (*PGMRSetElapsedTime)(double);
 
 static dispatch_once_t PGMRLoadOnce;
 static BOOL PGMRRegistered = NO;
@@ -32,6 +33,7 @@ static void PGLoadMediaRemote(void) {
         PGMRGetClient = (void (*)(dispatch_queue_t, void (^)(id)))dlsym(handle, "MRMediaRemoteGetNowPlayingClient");
         PGMRGetPID = (void (*)(dispatch_queue_t, void (^)(int)))dlsym(handle, "MRMediaRemoteGetNowPlayingApplicationPID");
         PGMRSendCommand = (Boolean (*)(int, CFDictionaryRef))dlsym(handle, "MRMediaRemoteSendCommand");
+        PGMRSetElapsedTime = (void (*)(double))dlsym(handle, "MRMediaRemoteSetElapsedTime");
         PGDebugLog(@"MediaRemote: 已加载 注册=%d 信息=%d 播放态=%d 命令=%d 客户端=%d",
                    PGMRRegister != NULL, PGMRGetInfo != NULL, PGMRGetIsPlaying != NULL,
                    PGMRSendCommand != NULL, PGMRGetClient != NULL);
@@ -381,6 +383,14 @@ static NSString *PGBundleIdentifierForPID(int pid) {
 }
 
 #pragma mark 控制
+
+- (void)seekToElapsedTime:(double)seconds {
+    PGLoadMediaRemote();
+    if(!PGMRSetElapsedTime||!isfinite(seconds))return;
+    double limit=self.duration>0?self.duration:1.0e12;
+    PGMRSetElapsedTime(MAX(0.0,MIN(seconds,limit)));
+    [self refresh];
+}
 
 - (void)sendCommand:(PGMediaCommand)command {
     PGLoadMediaRemote();
