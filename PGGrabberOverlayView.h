@@ -5,7 +5,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// Edge-docked media/status card. The SpringBoard host manages its position and size.
 @interface PGGrabberOverlayView : UIView
 
-/// Scales the card's internal geometry and preferred width/height (clamped to 0.65–1.50).
+/// Scales the card's internal geometry and preferred width/height (clamped to 0.65–1.60).
 @property (nonatomic, assign) CGFloat cardScale;
 /// Visual-effect strength, 0.0–1.0. This changes the blur view's alpha.
 @property (nonatomic, assign) CGFloat blurAmount;
@@ -13,6 +13,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat backgroundOpacity;
 /// Corner radius in points at cardScale == 1.0; it scales with cardScale.
 @property (nonatomic, assign) CGFloat cornerRadius;
+/// 圆角策略：0 统一 / 1 收起强制胶囊 / 2 全部半高 / 3 小圆角。半径始终会被夹到不超过半高。
+@property (nonatomic, assign) NSInteger cornerStyle;
 
 
 /// Called when the close button is tapped.

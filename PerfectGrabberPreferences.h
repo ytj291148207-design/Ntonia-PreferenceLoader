@@ -19,6 +19,8 @@ FOUNDATION_EXPORT NSString *const PGPreferencesChangedNotification;
 @property (nonatomic, readonly) CGFloat cardBlur;
 @property (nonatomic, readonly) CGFloat cardOpacity;
 @property (nonatomic, readonly) CGFloat cardCornerRadius;
+/// 0 = 统一圆角 / 1 = 收起强制胶囊 / 2 = 全部半高胶囊 / 3 = 小圆角。
+@property (nonatomic, readonly) NSInteger cornerStyle;
 @property (nonatomic, readonly) NSInteger backgroundMode;
 
 + (instancetype)sharedPreferences;

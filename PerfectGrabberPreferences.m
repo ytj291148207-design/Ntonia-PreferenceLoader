@@ -15,6 +15,7 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
 @property (nonatomic, readwrite) CGFloat cardBlur;
 @property (nonatomic, readwrite) CGFloat cardOpacity;
 @property (nonatomic, readwrite) CGFloat cardCornerRadius;
+@property (nonatomic, readwrite) NSInteger cornerStyle;
 @property (nonatomic, readwrite) NSInteger backgroundMode;
 @end
 
@@ -65,7 +66,8 @@ NSString *const PGPreferencesChangedNotification = @"com.netskao.perfectgrabber.
     self.cardBlur = MAX(0.0, MIN(1.0, [[self valueForKey:@"CardBlur" fallback:@0.82] doubleValue]));
     self.cardOpacity = MAX(0.05, MIN(1.0, [[self valueForKey:@"CardOpacity" fallback:@0.78] doubleValue]));
     self.cardCornerRadius = MAX(0.0, MIN(48.0,
-                            [[self valueForKey:@"CardCornerRadius" fallback:@22.0] doubleValue]));
+                            [[self valueForKey:@"CardCornerRadius" fallback:@34.0] doubleValue]));
+    self.cornerStyle = MAX(0, MIN(3, [[self valueForKey:@"CornerStyle" fallback:@0] integerValue]));
     self.backgroundMode = MAX(0, MIN(2, [[self valueForKey:@"BackgroundMode" fallback:@1] integerValue]));
 }
 

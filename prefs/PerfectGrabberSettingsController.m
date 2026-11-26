@@ -3,6 +3,7 @@
 #import <math.h>
 #import <spawn.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <objc/runtime.h>
 
 extern char **environ;
 
@@ -13,18 +14,33 @@ static id PGReadValue(NSString *key, id fallback) {
                                                         (__bridge CFStringRef)PGDomain);
     return CFBridgingRelease(value) ?: fallback;
 }
+static void PGPostChanged(void) {
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), PGChanged,
+                                         NULL, NULL, YES);
+}
 static void PGWriteValue(NSString *key, id value) {
     CFPreferencesSetAppValue((__bridge CFStringRef)key,
                              (__bridge CFPropertyListRef)value,
                              (__bridge CFStringRef)PGDomain);
     CFPreferencesAppSynchronize((__bridge CFStringRef)PGDomain);
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), PGChanged,
-                                         NULL, NULL, YES);
+    // 滑块打开 continuous 之后每秒会写几十次，通知合并到 100ms 一次，
+    // 否则 SpringBoard 会跟着每秒重排几十次卡片，反而卡。
+    static CFTimeInterval lastPost = 0.0;
+    static BOOL postScheduled = NO;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - lastPost >= 0.10) { lastPost = now; PGPostChanged(); return; }
+    if (postScheduled) return;
+    postScheduled = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        postScheduled = NO;
+        lastPost = CACurrentMediaTime();
+        PGPostChanged();
+    });
 }
 
 @interface PerfectGrabberSettingsController () <UIColorPickerViewControllerDelegate>
 @property (nonatomic, copy) NSString *activeColorKey;
-@property (nonatomic, assign) CFTimeInterval lastSliderHaptic;
+@property (nonatomic, strong) UISelectionFeedbackGenerator *sliderHaptics;
 @end
 
 @implementation PerfectGrabberSettingsController
@@ -56,7 +72,7 @@ static void PGWriteValue(NSString *key, id value) {
     if (_specifiers) return _specifiers;
     NSMutableArray *items = [NSMutableArray array];
     PSSpecifier *main = [PSSpecifier groupSpecifierWithName:@"顶部播放器卡片"];
-    [main setProperty:@"从顶部下拉触发。卡片固定在顶部；时间、电量、温度和 CPU 居中显示。长按展开同一卡片内的播放控制和进度条；卡片保持显示，点击右上角 × 关闭。"
+    [main setProperty:@"从顶部下拉触发。卡片固定在顶部；时间、电量、温度和 CPU 居中显示。长按展开播放控制和进度条，松手不会收回；只有点右上角 × 才关闭。"
                 forKey:PSFooterTextGroupKey];
     [items addObject:main];
     [items addObject:[self preferenceNamed:@"启用卡片" key:@"EnabledPerfectGrabber" defaultValue:@NO cell:PSSwitchCell]];
@@ -70,7 +86,7 @@ static void PGWriteValue(NSString *key, id value) {
         @{@"name":@"字体大小", @"key":@"FontSize", @"value":@15.0, @"min":@9.0, @"max":@24.0, @"help":@"调整时间、状态和歌曲信息的文字大小。"},
         @{@"name":@"毛玻璃强度", @"key":@"CardBlur", @"value":@0.82, @"min":@0.0, @"max":@1.0, @"help":@"调整卡片背后模糊效果的强弱；数值越大越明显。"},
         @{@"name":@"背景透明度", @"key":@"CardOpacity", @"value":@0.78, @"min":@0.05, @"max":@1.0, @"help":@"调整卡片深色叠底的不透明程度；数值越大底色越实。"},
-        @{@"name":@"卡片圆角", @"key":@"CardCornerRadius", @"value":@22.0, @"min":@0.0, @"max":@48.0, @"help":@"调整卡片四角的圆弧半径。"}
+        @{@"name":@"卡片圆角", @"key":@"CardCornerRadius", @"value":@34.0, @"min":@0.0, @"max":@48.0, @@"help":@"调整卡片四角的圆弧半径；超过卡片高度一半时会自动按一半显示（收起态因此看是胶囊）。"}
     ];
     for (NSDictionary *option in sliderOptions) {
         PSSpecifier *group = [PSSpecifier groupSpecifierWithName:nil];
@@ -81,6 +97,10 @@ static void PGWriteValue(NSString *key, id value) {
         [slider setProperty:option[@"max"] forKey:PSControlMaximumKey];
         [items addObject:slider];
     }
+    NSArray *cornerStyleNames = @[@"统一圆角", @"收起胶囊", @"全部胶囊", @"小圆角"];
+    NSInteger cornerStyle = MAX(0, MIN(3, [PGReadValue(@"CornerStyle", @0) integerValue]));
+    [items addObject:[self buttonNamed:[NSString stringWithFormat:@"圆角样式：%@（点击切换）", cornerStyleNames[cornerStyle]]
+                                action:@selector(cycleCornerStyle)]];
     NSArray *backgroundNames = @[@"磨砂", @"毛玻璃", @"高斯模糊"];
     NSInteger backgroundIndex = MAX(0, MIN(2, [PGReadValue(@"BackgroundMode", @1) integerValue]));
     [items addObject:[self buttonNamed:[NSString stringWithFormat:@"背景模式：%@（点击切换）", backgroundNames[backgroundIndex]] action:@selector(cycleBackgroundMode)]];
@@ -104,13 +124,38 @@ static void PGWriteValue(NSString *key, id value) {
     PGWriteValue([specifier propertyForKey:PSKeyNameKey], value);
 }
 
-// Preferences only calls setPreferenceValue when a slider is committed. Observe
-// UIControlEventValueChanged directly so feedback tracks every movement tick.
+// PSSliderCell 默认只在松手时提交，拖动过程不发 valueChanged —— 这就是"松手才震"的根因。
+// 这里把 slider 设成 continuous，并且按"格"触发 selection 触感：每跨一格响一次，
+// 手感是逐格步进，而不是按时间节流（时间节流在慢速拖动时会漏格）。
+static const void *PGSliderDetentsKey = &PGSliderDetentsKey;
+static const void *PGSliderLastStepKey = &PGSliderLastStepKey;
+
+- (UISelectionFeedbackGenerator *)sliderHaptics {
+    if (!_sliderHaptics) _sliderHaptics = [UISelectionFeedbackGenerator new];
+    return _sliderHaptics;
+}
+
+- (BOOL)vibrationEnabled {
+    return [PGReadValue(@"VibrationFeedback", @YES) boolValue];
+}
+
+- (void)settingsSliderBegan:(UISlider *)slider {
+    objc_setAssociatedObject(slider, PGSliderLastStepKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [self.sliderHaptics prepare];
+}
+
 - (void)settingsSliderChanged:(UISlider *)slider {
-    CFTimeInterval now = CACurrentMediaTime();
-    if (now - self.lastSliderHaptic < 0.075) return;
-    self.lastSliderHaptic = now;
-    AudioServicesPlaySystemSound(1519);
+    if (![self vibrationEnabled]) return;
+    NSInteger detents = [objc_getAssociatedObject(slider, PGSliderDetentsKey) integerValue];
+    if (detents < 2) detents = 30;
+    CGFloat span = slider.maximumValue - slider.minimumValue;
+    if (span <= 0.0) return;
+    NSInteger step = (NSInteger)floor((slider.value - slider.minimumValue) / span * (CGFloat)detents);
+    NSNumber *last = objc_getAssociatedObject(slider, PGSliderLastStepKey);
+    if (last && last.integerValue == step) return;
+    objc_setAssociatedObject(slider, PGSliderLastStepKey, @(step), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [self.sliderHaptics selectionChanged];
+    [self.sliderHaptics prepare];
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -120,8 +165,21 @@ static void PGWriteValue(NSString *key, id value) {
         [pending removeLastObject];
         if ([view isKindOfClass:UISlider.class]) {
             UISlider *slider = (UISlider *)view;
+            // 关键：continuous = YES，拖动过程中才发 valueChanged。
+            slider.continuous = YES;
+            id specifier = nil;
+            @try { specifier = [cell valueForKey:@"specifier"]; } @catch (__unused NSException *e) { specifier = nil; }
+            NSInteger detents = 30;
+            if (specifier) {
+                CGFloat minimum = [[specifier propertyForKey:PSControlMinimumKey] doubleValue];
+                CGFloat maximum = [[specifier propertyForKey:PSControlMaximumKey] doubleValue];
+                if (maximum > minimum) detents = 40;
+            }
+            objc_setAssociatedObject(slider, PGSliderDetentsKey, @(detents), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [slider removeTarget:self action:@selector(settingsSliderChanged:) forControlEvents:UIControlEventValueChanged];
             [slider addTarget:self action:@selector(settingsSliderChanged:) forControlEvents:UIControlEventValueChanged];
+            [slider removeTarget:self action:@selector(settingsSliderBegan:) forControlEvents:UIControlEventTouchDown];
+            [slider addTarget:self action:@selector(settingsSliderBegan:) forControlEvents:UIControlEventTouchDown];
             continue;
         }
         [pending addObjectsFromArray:view.subviews];
@@ -157,6 +215,13 @@ static void PGWriteValue(NSString *key, id value) {
     picker.supportsAlpha = NO;
     picker.selectedColor = [self colorForHex:stored fallback:fallback];
     [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)cycleCornerStyle {
+    NSInteger current = [PGReadValue(@"CornerStyle", @0) integerValue];
+    PGWriteValue(@"CornerStyle", @((current + 1) % 4));
+    _specifiers = nil;
+    [self reloadSpecifiers];
 }
 
 - (void)cycleBackgroundMode {
@@ -199,7 +264,7 @@ static void PGWriteValue(NSString *key, id value) {
 - (void)onResetSettings {
     NSArray *keys = @[@"EnabledPerfectGrabber", @"VibrationFeedback", @"Disable24H", @"ChargingIcon",
                       @"FontSize", @"TextColor", @"CardWidth", @"CardScale",
-                      @"CardBlur", @"CardOpacity", @"CardCornerRadius", @"BackgroundMode"];
+                      @"CardBlur", @"CardOpacity", @"CardCornerRadius", @"CornerStyle", @"BackgroundMode"];
     for (NSString *key in keys) {
         CFPreferencesSetAppValue((__bridge CFStringRef)key, NULL, (__bridge CFStringRef)PGDomain);
     }

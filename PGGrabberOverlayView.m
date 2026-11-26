@@ -12,6 +12,25 @@
 - (BOOL)isOnAC;
 @end
 
+/// 在高度 y 处，圆角矩形左边界到 view 左沿的水平距离。
+/// 胶囊卡片如果只给固定 padding，文字会压在端部的圆弧上（截图里 19:53 就是这样被切的）。
+static CGFloat PGRadiusInset(CGFloat y, CGFloat height, CGFloat radius) {
+    if (radius <= 0.5 || height <= 0.0) return 0.0;
+    CGFloat r = MIN(radius, height * 0.5);
+    CGFloat dy = 0.0;
+    if (y < r) dy = r - y;
+    else if (y > height - r) dy = y - (height - r);
+    else return 0.0;
+    CGFloat inner = sqrt(MAX(0.0, r * r - dy * dy));
+    return MAX(0.0, r - inner);
+}
+
+/// 一段内容（minY...maxY）要在圆角矩形内完整可见，左右各需要让出多少。
+/// 取上下两端内缩的较大值：只用中心高度算，顶边会伸进弧线里被切掉。
+static CGFloat PGFrameInset(CGFloat minY, CGFloat maxY, CGFloat height, CGFloat radius) {
+    return MAX(PGRadiusInset(minY, height, radius), PGRadiusInset(maxY, height, radius));
+}
+
 static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     if (!isfinite(value)) return minimum;
     return MIN(maximum, MAX(minimum, value));
@@ -45,6 +64,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @property (nonatomic, assign) BOOL isSeeking;
 @property (nonatomic, assign) double displayedSeekElapsed;
 @property (nonatomic, assign) NSInteger lastHapticStep;
+@property (nonatomic, assign) NSInteger seekDetentCount;
+@property (nonatomic, strong) UISelectionFeedbackGenerator *seekHaptics;
 @property (nonatomic, assign) BOOL vibrationFeedbackEnabled;
 @property (nonatomic, copy) NSString *compactStatusText;
 @property (nonatomic, copy) NSString *compactTrackText;
@@ -59,6 +80,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @synthesize blurAmount = _blurAmount;
 @synthesize backgroundOpacity = _backgroundOpacity;
 @synthesize cornerRadius = _cornerRadius;
+@synthesize cornerStyle = _cornerStyle;
 @synthesize expanded = _expanded;
 @synthesize compactMode = _compactMode;
 @synthesize deferNativeGrabberDismissal = _deferNativeGrabberDismissal;
@@ -68,10 +90,13 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     if (!self) return nil;
 
     PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
-    _cardScale = PGClamp(preferences.cardScale, 0.65, 1.50);
+    _cardScale = PGClamp(preferences.cardScale, 0.65, 1.60);
     _blurAmount = PGClamp(preferences.cardBlur, 0.0, 1.0);
     _backgroundOpacity = PGClamp(preferences.cardOpacity, 0.0, 1.0);
     _cornerRadius = PGClamp(preferences.cardCornerRadius, 0.0, 80.0);
+    _cornerStyle = MAX(0, MIN(3, preferences.cornerStyle));
+    _seekHaptics = [UISelectionFeedbackGenerator new];
+    _seekDetentCount = 30;
 
     self.backgroundColor = UIColor.clearColor;
     self.clipsToBounds = YES;
@@ -102,7 +127,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     [self addSubview:_tintView];
     [self insertSubview:_gaussianBlurBackdrop belowSubview:_blurView];
 
-    _timeLabel = [self newLabelWithWeight:UIFontWeightSemibold alignment:NSTextAlignmentCenter];
+    _timeLabel = [self newLabelWithWeight:UIFontWeightSemibold alignment:NSTextAlignmentLeft];
     _timeLabel.adjustsFontSizeToFitWidth = YES;
     _timeLabel.minimumScaleFactor = 0.70;
     [self addSubview:_timeLabel];
@@ -122,7 +147,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     else [_closeButton setTitle:@"×" forState:UIControlStateNormal];
     _closeButton.accessibilityLabel = @"关闭卡片";
     _closeButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.12];
-    _closeButton.layer.cornerRadius = 13.0;
+    _closeButton.layer.cornerRadius = 10.0;
+    _closeButton.clipsToBounds = YES;   // 底色先裁成正圆，避免方角被卡片圆弧切掉
     _closeButton.tintColor = UIColor.whiteColor;
     [_closeButton addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:_closeButton];
@@ -170,8 +196,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     }
 
     _cardLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleCardLongPress:)];
-    _cardLongPress.minimumPressDuration = 0.40;
-    _cardLongPress.allowableMovement = 18.0;
+    _cardLongPress.minimumPressDuration = 0.32;
+    _cardLongPress.allowableMovement = 24.0;
     _cardLongPress.cancelsTouchesInView = NO;
     _cardLongPress.delegate = self;
     [self addGestureRecognizer:_cardLongPress];
@@ -198,7 +224,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     else [button setTitle:fallback forState:UIControlStateNormal];
     button.tintColor = UIColor.whiteColor;
     button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.13];
-    button.layer.cornerRadius = 18.0;
+    button.layer.cornerRadius = 12.0;
     button.accessibilityLabel = accessibility;
     button.hidden = YES;
     return button;
@@ -212,7 +238,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
 - (CGFloat)cardScale { return _cardScale; }
 - (void)setCardScale:(CGFloat)value {
-    CGFloat next = PGClamp(value, 0.65, 1.50);
+    CGFloat next = PGClamp(value, 0.65, 1.60);
     if (fabs(next - _cardScale) < 0.001) return;
     _cardScale = next;
     [self refreshAppearance];
@@ -229,6 +255,15 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 - (void)setBackgroundOpacity:(CGFloat)value {
     _backgroundOpacity = PGClamp(value, 0.0, 1.0);
     [self refreshAppearance];
+}
+
+- (NSInteger)cornerStyle { return _cornerStyle; }
+- (void)setCornerStyle:(NSInteger)value {
+    NSInteger next = MAX(0, MIN(3, value));
+    if (next == _cornerStyle) return;
+    _cornerStyle = next;
+    [self refreshAppearance];
+    [self setNeedsLayout];
 }
 
 - (CGFloat)cornerRadius { return _cornerRadius; }
@@ -248,28 +283,33 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     if (_expanded == expanded) return;
     _expanded = expanded;
     CGFloat targetHeight = [self heightForCurrentWidth];
+    [self setNeedsLayout];
 
+    // 有宿主时由宿主同时改 frame 的宽度与高度并驱动内部布局：
+    // 之前这里自己改 frame、宿主再改一次，两个 0.24/0.28s 动画抢同一个值，
+    // 中途会被原生布局覆盖回去，表现就是"展开后自己缩回"。
+    if (self.onHeightChange) {
+        self.onHeightChange(targetHeight);
+        return;
+    }
+    if (CGRectGetWidth(self.bounds) <= 0.0) { [self layoutIfNeeded]; return; }
     void (^layoutBlock)(void) = ^{
-        if (CGRectGetWidth(self.bounds) > 0.0 && CGRectGetHeight(self.bounds) > 0.0) {
-            CGRect frame = self.frame;
-            frame.size.height = targetHeight;
-            self.frame = frame;
-        }
-        [self setNeedsLayout];
+        CGRect frame = self.frame;
+        frame.size.height = targetHeight;
+        self.frame = frame;
         [self layoutIfNeeded];
     };
     if (animated) {
-        [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut animations:layoutBlock completion:^(BOOL finished) {
-            if (self.onHeightChange) self.onHeightChange(targetHeight);
-        }];
+        [UIView animateWithDuration:0.26 delay:0
+                            options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut
+                         animations:layoutBlock completion:nil];
     } else {
         layoutBlock();
-        if (self.onHeightChange) self.onHeightChange(targetHeight);
     }
 }
 
 - (CGFloat)heightForWidth:(CGFloat)width {
-    CGFloat scale = PGClamp(self.cardScale, 0.65, 1.50);
+    CGFloat scale = PGClamp(self.cardScale, 0.65, 1.60);
     if (self.compactMode) return (self.isExpanded ? 104.0 : 44.0) * scale;
     // Room for a readable status row, a 60pt artwork row, and expanded control buttons.
     return (112.0 + (self.isExpanded ? 64.0 : 0.0)) * scale;
@@ -279,12 +319,52 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     return [self heightForWidth:CGRectGetWidth(self.bounds)];
 }
 
+#pragma mark - Corner radius（唯一入口）
+
+/// 半径永远夹在 [0, 高度/2]：超过半高在视觉上没有任何区别，只会让 CALayer 的连续曲率
+/// 在四角被硬切，看起来像"圆角没生效"。所有子视图共用同一个半径，避免出现外圆内方。
+- (CGFloat)pgEffectiveCornerRadius {
+    CGFloat scale = PGClamp(self.cardScale, 0.65, 1.60);
+    CGFloat height = CGRectGetHeight(self.bounds);
+    if (height <= 1.0) height = [self heightForWidth:CGRectGetWidth(self.bounds)];
+    CGFloat half = MAX(0.0, floor(height * 0.5));
+    CGFloat base = MAX(0.0, self.cornerRadius * scale);
+    CGFloat radius = base;
+    switch (self.cornerStyle) {
+        case 1: radius = self.isExpanded ? base : half; break;  // 收起永远正圆，展开跟滑杆
+        case 2: radius = half; break;                            // 收起/展开都半高
+        case 3: radius = MIN(base, 16.0 * scale); break;         // 小圆角
+        default: radius = base; break;                           // 统一
+    }
+    return MAX(0.0, MIN(radius, half));
+}
+
+- (void)pgApplyCornerRadius {
+    CGFloat radius = [self pgEffectiveCornerRadius];
+    self.layer.cornerCurve = kCACornerCurveContinuous;
+    self.layer.cornerRadius = radius;
+    self.layer.masksToBounds = YES;
+    for (UIView *view in @[_blurView, _tintView, _gaussianBlurBackdrop]) {
+        if (!view.superview) continue;
+        view.layer.cornerCurve = kCACornerCurveContinuous;
+        view.layer.cornerRadius = radius;
+        view.layer.masksToBounds = YES;
+        view.clipsToBounds = YES;
+    }
+    // 直角时不要再留发丝描边，否则四条边会各多出一条 1px 亮线。
+    self.layer.borderWidth = radius > 0.5 ? (1.0 / MAX(UIScreen.mainScreen.scale, 1.0)) : 0.0;
+    self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.22].CGColor;
+}
+
 #pragma mark - Appearance and layout
 
 - (UIFont *)configuredFontWithSize:(CGFloat)size weight:(UIFontWeight)weight {
+    // 以前是拿"字体大小"直接当字号用：默认 15 会把 9pt 的状态行撑成 15pt，
+    // 结果一排文字把 17pt 的行塞满、被圆角切掉。改成按比例缩放，滑杆仍能整体放大缩小。
     PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
-    CGFloat requested = (preferences.fontSize > 0.0 ? preferences.fontSize : 13.0) * self.cardScale;
-    return [UIFont systemFontOfSize:MAX(9.0, MIN(24.0, requested)) weight:weight];
+    CGFloat ratio = PGClamp((preferences.fontSize > 0.0 ? preferences.fontSize : 15.0) / 15.0, 0.60, 1.60);
+    CGFloat requested = size * self.cardScale * ratio;
+    return [UIFont systemFontOfSize:MAX(7.0, MIN(26.0, requested)) weight:weight];
 }
 
 - (void)applyAppearance {
@@ -310,17 +390,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.tintView.backgroundColor = [UIColor colorWithWhite:0.0
                                                       alpha:PGClamp(self.backgroundOpacity, 0.0, 1.0)];
     self.blurView.hidden = NO;
-    self.layer.cornerRadius = MIN(MIN(CGRectGetWidth(self.bounds),CGRectGetHeight(self.bounds))*0.5,MAX(0.0,self.cornerRadius*self.cardScale));
-    self.layer.cornerCurve = kCACornerCurveContinuous;
-    self.blurView.layer.cornerRadius = self.layer.cornerRadius;
-    self.blurView.clipsToBounds = YES;
-    self.blurView.layer.masksToBounds = YES;
-    self.gaussianBlurBackdrop.layer.cornerRadius = self.layer.cornerRadius;
-    self.gaussianBlurBackdrop.clipsToBounds = YES;
-    self.gaussianBlurBackdrop.layer.masksToBounds = YES;
-    self.tintView.layer.cornerRadius = self.layer.cornerRadius;
-    self.tintView.clipsToBounds = YES;
-    self.tintView.layer.masksToBounds = YES;
+    [self pgApplyCornerRadius];
     self.timeLabel.textColor = textColor;
     self.batteryLabel.textColor = textColor;
     self.temperatureLabel.textColor = textColor;
@@ -339,10 +409,10 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.artistLabel.font = [self configuredFontWithSize:12.0 weight:UIFontWeightRegular];
     self.lyricsLabel.font = [self configuredFontWithSize:11.0 weight:UIFontWeightRegular];
     self.artworkFallbackLabel.font = [UIFont systemFontOfSize:25.0 * self.cardScale weight:UIFontWeightLight];
-    self.closeButton.layer.cornerRadius = 13.0 * self.cardScale;
+    self.closeButton.layer.cornerRadius = 10.0 * self.cardScale;
     for (UIButton *button in @[_previousButton, _playPauseButton, _nextButton]) {
         button.tintColor = textColor;
-        button.layer.cornerRadius = 19.0 * self.cardScale;
+        button.layer.cornerRadius = 12.0 * self.cardScale;
     }
     [self setNeedsLayout];
 }
@@ -351,50 +421,110 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     [super layoutSubviews];
     CGFloat width = CGRectGetWidth(self.bounds);
     CGFloat height = CGRectGetHeight(self.bounds);
-    CGFloat scale = PGClamp(self.cardScale, 0.65, 1.50);
-    self.layer.cornerRadius = MIN(MIN(width,height)*0.5,MAX(0.0,self.cornerRadius*scale));
-    self.layer.cornerCurve = kCACornerCurveContinuous;
-    self.blurView.frame = self.bounds; self.blurView.layer.cornerRadius=self.layer.cornerRadius;
-    self.gaussianBlurBackdrop.frame = self.bounds; self.gaussianBlurBackdrop.layer.cornerRadius=self.layer.cornerRadius;
-    self.tintView.frame = self.bounds; self.tintView.layer.cornerRadius=self.layer.cornerRadius;
+    CGFloat scale = PGClamp(self.cardScale, 0.65, 1.60);
+    [self pgApplyCornerRadius];
+    self.blurView.frame = self.bounds;
+    self.gaussianBlurBackdrop.frame = self.bounds;
+    self.tintView.frame = self.bounds;
+    // 圆按钮的半径必须正好是边长的一半；超过一半 CALayer 会把圆弧切平（× 和上一首/下一首会变形）
+    self.closeButton.layer.cornerRadius = 10.0 * scale;
+    for (UIButton *button in @[_previousButton, _playPauseButton, _nextButton]) {
+        button.layer.cornerRadius = 12.0 * scale;
+    }
 
     if (self.compactMode) {
-        CGFloat pad=8.0*scale, close=20.0*scale, row=17.0*scale;
-        CGFloat statusWidth=MAX(0.0,width-pad*2.0-close-3.0*scale);
+        CGFloat radius = [self pgEffectiveCornerRadius];
+        CGFloat basePad = 6.0 * scale;
+        CGFloat close = 20.0 * scale;
+        CGFloat row = 17.0 * scale;
+        // 状态行贴着上边，是圆角吃得最狠的一行。必须按整行（顶边到底边）算内缩，
+        // 只按中心高度算会让顶边伸进弧线，时间首位数字被切掉。
+        CGFloat statusY = 3.0 * scale;
+        CGFloat statusInset = basePad + PGFrameInset(statusY, statusY + row, height, radius);
+        CGFloat statusRight = MAX(0.0, width - statusInset - close - 3.0 * scale);
+        CGFloat rowWidth = MAX(0.0, statusRight - statusInset);
+        CGFloat tw = rowWidth * 0.20, bw = rowWidth * 0.23, hw = rowWidth * 0.22;
+
+        self.timeLabel.frame = CGRectMake(statusInset, statusY, tw, row);
+        self.batteryLabel.frame = CGRectMake(statusInset + tw, statusY, bw, row);
+        self.temperatureLabel.frame = CGRectMake(statusInset + tw + bw, statusY, hw, row);
+        self.cpuLabel.frame = CGRectMake(statusInset + tw + bw + hw, statusY, rowWidth - tw - bw - hw, row);
+        for (UILabel *label in @[_timeLabel, _batteryLabel, _temperatureLabel, _cpuLabel]) {
+            label.font = [self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];
+            label.adjustsFontSizeToFitWidth = YES;
+            label.minimumScaleFactor = 0.35;
+            label.textAlignment = NSTextAlignmentCenter;
+            label.hidden = NO;
+        }
+        CGFloat closeInset = PGFrameInset(statusY, statusY + close, height, radius);
+        self.closeButton.frame = CGRectMake(width - closeInset - basePad - close, statusY, close, close);
+        self.closeButton.hidden = NO;
+
         if (!self.isExpanded) {
-            CGFloat rowWidth=statusWidth, rowX=(width-rowWidth)*0.5, tw=rowWidth*0.20,bw=rowWidth*0.23,hw=rowWidth*0.22;
-            self.timeLabel.frame=CGRectMake(rowX,0,tw,row);
-            self.batteryLabel.frame=CGRectMake(rowX+tw,0,bw,row);
-            self.temperatureLabel.frame=CGRectMake(rowX+tw+bw,0,hw,row);
-            self.cpuLabel.frame=CGRectMake(rowX+tw+bw+hw,0,rowWidth-tw-bw-hw,row);
-            self.closeButton.frame=CGRectMake(width-pad-close,0,close,close); self.closeButton.hidden=NO;
-            for (UILabel *label in @[_timeLabel,_batteryLabel,_temperatureLabel,_cpuLabel]) { label.font=[self configuredFontWithSize:9.0 weight:UIFontWeightSemibold]; label.adjustsFontSizeToFitWidth=YES; label.minimumScaleFactor=0.35; label.textAlignment=NSTextAlignmentCenter; }
-            CGFloat y=19.0*scale, art=18.0*scale;
-            self.artworkView.frame=CGRectMake(pad,y,art,art); self.artworkView.layer.cornerRadius=4.0*scale; self.artworkFallbackLabel.frame=self.artworkView.frame;
-            CGFloat tx=CGRectGetMaxX(self.artworkView.frame)+5.0*scale;
-            self.titleLabel.frame=CGRectMake(tx,y,MAX(0.0,width-pad-tx),art);
-            self.titleLabel.font=[self configuredFontWithSize:9.0 weight:UIFontWeightSemibold]; self.titleLabel.adjustsFontSizeToFitWidth=YES; self.titleLabel.minimumScaleFactor=0.5; self.titleLabel.text=self.compactTrackText.length?self.compactTrackText:self.titleLabel.text;
-            self.artistLabel.frame=CGRectZero; self.lyricsLabel.frame=CGRectZero;
-            self.artworkView.hidden=NO; self.artworkFallbackLabel.hidden=(self.artworkView.image!=nil); self.titleLabel.hidden=NO; self.artistLabel.hidden=YES; self.lyricsLabel.hidden=YES;
-            self.progressSlider.hidden=YES; self.progressSlider.frame=CGRectZero;
-            self.previousButton.hidden=YES; self.playPauseButton.hidden=YES; self.nextButton.hidden=YES;
+            CGFloat y = 21.0 * scale, art = 18.0 * scale;
+            CGFloat contentInset = basePad + PGFrameInset(y, y + art, height, radius);
+            self.artworkView.frame = CGRectMake(contentInset, y, art, art);
+            self.artworkView.layer.cornerRadius = 4.0 * scale;
+            self.artworkFallbackLabel.frame = self.artworkView.frame;
+            CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 5.0 * scale;
+            self.titleLabel.frame = CGRectMake(tx, y, MAX(0.0, width - contentInset - tx), art);
+            self.titleLabel.font = [self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];
+            self.titleLabel.adjustsFontSizeToFitWidth = YES;
+            self.titleLabel.minimumScaleFactor = 0.5;
+            self.titleLabel.text = self.compactTrackText.length ? self.compactTrackText : self.titleLabel.text;
+            self.artistLabel.frame = CGRectZero;
+            self.lyricsLabel.frame = CGRectZero;
+            self.artworkView.hidden = NO;
+            self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
+            self.titleLabel.hidden = NO;
+            self.artistLabel.hidden = YES;
+            self.lyricsLabel.hidden = YES;
+            self.progressSlider.hidden = YES;
+            self.progressSlider.frame = CGRectZero;
+            self.previousButton.hidden = YES;
+            self.playPauseButton.hidden = YES;
+            self.nextButton.hidden = YES;
+            self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.62) weight:UIFontWeightLight];
             return;
         }
-        CGFloat rowWidth=statusWidth, rowX=(width-rowWidth)*0.5, tw=rowWidth*0.20,bw=rowWidth*0.23,hw=rowWidth*0.22;
-        self.timeLabel.frame=CGRectMake(rowX,2.0*scale,tw,row);
-        self.batteryLabel.frame=CGRectMake(rowX+tw,2.0*scale,bw,row);
-        self.temperatureLabel.frame=CGRectMake(rowX+tw+bw,2.0*scale,hw,row);
-        self.cpuLabel.frame=CGRectMake(rowX+tw+bw+hw,2.0*scale,rowWidth-tw-bw-hw,row);
-        self.closeButton.frame=CGRectMake(width-pad-close,2.0*scale,close,close); self.closeButton.hidden=NO;
-        for(UILabel*label in @[_timeLabel,_batteryLabel,_temperatureLabel,_cpuLabel]){label.font=[self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];label.adjustsFontSizeToFitWidth=YES;label.minimumScaleFactor=0.35;label.textAlignment=NSTextAlignmentCenter;}
-        CGFloat y=24.0*scale,art=34.0*scale;self.artworkView.frame=CGRectMake(pad,y,art,art);self.artworkView.layer.cornerRadius=6.0*scale;self.artworkFallbackLabel.frame=self.artworkView.frame;
-        CGFloat tx=CGRectGetMaxX(self.artworkView.frame)+7.0*scale,controls=88.0*scale,textW=MAX(20.0,width-pad-tx-controls-4.0*scale);
-        self.titleLabel.frame=CGRectMake(tx,y,textW,18.0*scale);self.artistLabel.frame=CGRectMake(tx,y+18.0*scale,textW,15.0*scale);self.lyricsLabel.frame=CGRectZero;
-        self.artworkView.hidden=NO;self.artworkFallbackLabel.hidden=(self.artworkView.image!=nil);self.titleLabel.hidden=NO;self.artistLabel.hidden=NO;self.lyricsLabel.hidden=YES;
-        CGFloat bs=24.0*scale,gap=4.0*scale,x=width-pad-(bs*3.0+gap*2.0),cy=y+4.0*scale;
-        self.previousButton.frame=CGRectMake(x,cy,bs,bs);self.playPauseButton.frame=CGRectMake(x+bs+gap,cy,bs,bs);self.nextButton.frame=CGRectMake(x+(bs+gap)*2.0,cy,bs,bs);
-        self.previousButton.hidden=NO;self.playPauseButton.hidden=NO;self.nextButton.hidden=NO;
-        if(PGNowPlaying.sharedInstance.canSeek){self.progressSlider.frame=CGRectMake(tx,height-18.0*scale,width-tx-pad,14.0*scale);self.progressSlider.hidden=NO;}else{self.progressSlider.frame=CGRectZero;self.progressSlider.hidden=YES;}
+
+        CGFloat y = 24.0 * scale, art = 34.0 * scale;
+        CGFloat contentInset = basePad + PGFrameInset(y, y + art, height, radius);
+        self.artworkView.frame = CGRectMake(contentInset, y, art, art);
+        self.artworkView.layer.cornerRadius = 6.0 * scale;
+        self.artworkFallbackLabel.frame = self.artworkView.frame;
+        CGFloat controls = 88.0 * scale;
+        CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 7.0 * scale;
+        CGFloat textW = MAX(20.0, width - contentInset - tx - controls - 4.0 * scale);
+        self.titleLabel.frame = CGRectMake(tx, y, textW, 18.0 * scale);
+        self.artistLabel.frame = CGRectMake(tx, y + 18.0 * scale, textW, 15.0 * scale);
+        self.lyricsLabel.frame = CGRectZero;
+        self.titleLabel.font = [self configuredFontWithSize:13.0 weight:UIFontWeightSemibold];
+        self.artistLabel.font = [self configuredFontWithSize:11.0 weight:UIFontWeightRegular];
+        self.artworkView.hidden = NO;
+        self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
+        self.titleLabel.hidden = NO;
+        self.artistLabel.hidden = NO;
+        self.lyricsLabel.hidden = YES;
+        self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.62) weight:UIFontWeightLight];
+        CGFloat bs = 24.0 * scale, gap = 4.0 * scale;
+        CGFloat x = width - basePad - (bs * 3.0 + gap * 2.0);
+        CGFloat cy = y + 4.0 * scale;
+        self.previousButton.frame = CGRectMake(x, cy, bs, bs);
+        self.playPauseButton.frame = CGRectMake(x + bs + gap, cy, bs, bs);
+        self.nextButton.frame = CGRectMake(x + (bs + gap) * 2.0, cy, bs, bs);
+        self.previousButton.hidden = NO;
+        self.playPauseButton.hidden = NO;
+        self.nextButton.hidden = NO;
+        if (PGNowPlaying.sharedInstance.canSeek) {
+            CGFloat sliderY = height - 18.0 * scale;
+            CGFloat sliderInset = PGFrameInset(sliderY, sliderY + 14.0 * scale, height, radius);
+            self.progressSlider.frame = CGRectMake(tx, sliderY, MAX(40.0, width - tx - sliderInset), 14.0 * scale);
+            self.progressSlider.hidden = NO;
+        } else {
+            self.progressSlider.frame = CGRectZero;
+            self.progressSlider.hidden = YES;
+        }
         return;
     }
 
@@ -402,17 +532,20 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     CGFloat top = 7.0 * scale;
     CGFloat statusHeight = 27.0 * scale;
     CGFloat closeSize = 25.0 * scale;
-    self.closeButton.frame = CGRectMake(MAX(pad, width - pad - closeSize), top, closeSize, closeSize);
+    CGFloat radius = [self pgEffectiveCornerRadius];
+    // 左右留白按状态行纵向区间让出圆角，否则首个数字与关闭按钮的外角会被弧线裁掉
+    CGFloat sidePad = pad + PGFrameInset(top, top + statusHeight, height, radius);
+    self.closeButton.frame = CGRectMake(MAX(sidePad, width - sidePad - closeSize), top, closeSize, closeSize);
     CGFloat rightEdge = CGRectGetMinX(self.closeButton.frame) - 5.0 * scale;
-    CGFloat statusWidth = MAX(0.0, rightEdge - pad);
+    CGFloat statusWidth = MAX(0.0, rightEdge - sidePad);
 
     // Give every status item a useful minimum before shrinking on compact screens.
     CGFloat timeWidth = MIN(68.0 * scale, statusWidth * 0.21);
     CGFloat batteryWidth = MIN(90.0 * scale, statusWidth * 0.24);
     CGFloat temperatureWidth = MIN(78.0 * scale, statusWidth * 0.22);
     CGFloat cpuWidth = MAX(0.0, statusWidth - timeWidth - batteryWidth - temperatureWidth);
-    self.timeLabel.frame = CGRectMake(pad, top, timeWidth, statusHeight);
-    CGFloat cursor = pad + timeWidth;
+    self.timeLabel.frame = CGRectMake(sidePad, top, timeWidth, statusHeight);
+    CGFloat cursor = sidePad + timeWidth;
     self.batteryLabel.frame = CGRectMake(cursor, top, batteryWidth, statusHeight);
     cursor += batteryWidth;
     self.temperatureLabel.frame = CGRectMake(cursor, top, temperatureWidth, statusHeight);
@@ -453,7 +586,12 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.titleLabel.frame = CGRectMake(textX, textY, textWidth, titleHeight);
     self.artistLabel.frame = CGRectMake(textX, textY + titleHeight, textWidth, artistHeight);
     self.lyricsLabel.frame = CGRectMake(textX, textY + titleHeight + artistHeight, textWidth, lyricsHeight);
-    if(self.compactMode&&self.isExpanded&&PGNowPlaying.sharedInstance.canSeek){CGFloat sx=textX,sy=height-19.0*scale;self.progressSlider.frame=CGRectMake(sx,sy,MAX(40.0,width-sx-pad),15.0*scale);self.progressSlider.hidden=NO;}else{self.progressSlider.frame=CGRectZero;self.progressSlider.hidden=YES;}
+    if(self.compactMode&&self.isExpanded&&PGNowPlaying.sharedInstance.canSeek){
+        CGFloat sx=textX,sy=height-19.0*scale;
+        CGFloat sliderInset=PGFrameInset(sy,sy+15.0*scale,height,radius);
+        self.progressSlider.frame=CGRectMake(sx,sy,MAX(40.0,width-sx-sliderInset),15.0*scale);
+        self.progressSlider.hidden=NO;
+    }else{self.progressSlider.frame=CGRectZero;self.progressSlider.hidden=YES;}
 
     BOOL controlsVisible = self.isExpanded;
     self.previousButton.hidden = !controlsVisible;
@@ -550,14 +688,22 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     PGNowPlaying *nowPlaying = PGNowPlaying.sharedInstance;
     if (nowPlaying.duration <= 0.0) { self.isSeeking = NO; return; }
     self.isSeeking = YES;
-    self.lastHapticStep = (NSInteger)lrint(slider.value * 20.0);
+    // 把 0–1 切成固定 30 格：每跨一格给一次 selection 触感，就是"一格格"的手感。
+    self.seekDetentCount = 30;
+    self.lastHapticStep = (NSInteger)floor(slider.value * (CGFloat)self.seekDetentCount + 0.5);
     self.displayedSeekElapsed = slider.value * nowPlaying.duration;
+    [self.seekHaptics prepare];
 }
 - (void)progressChanged:(UISlider *)slider {
     double duration = PGNowPlaying.sharedInstance.duration;
     if (!self.isSeeking || duration <= 0.0) return;
-    NSInteger step = (NSInteger)lrint(slider.value * 20.0);
-    if (self.vibrationFeedbackEnabled && step != self.lastHapticStep) AudioServicesPlaySystemSound(1519);
+    NSInteger detents = MAX(1, self.seekDetentCount);
+    NSInteger step = (NSInteger)floor(slider.value * (CGFloat)detents + 0.5);
+    if (self.vibrationFeedbackEnabled && step != self.lastHapticStep) {
+        // 拖动过程中就逐格触发，不等松手。
+        [self.seekHaptics selectionChanged];
+        [self.seekHaptics prepare];
+    }
     self.lastHapticStep = step;
     self.displayedSeekElapsed = slider.value * duration;
 }
@@ -572,6 +718,11 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
 - (void)handleCardLongPress:(UILongPressGestureRecognizer *)recognizer {
     if (recognizer.state == UIGestureRecognizerStateBegan) {
+        if (self.vibrationFeedbackEnabled) {
+            UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+            [generator prepare];
+            [generator impactOccurred];
+        }
         if (self.onLongPressStateChange) self.onLongPressStateChange(YES);
         if (!self.isExpanded) [self setExpanded:YES animated:YES];
     } else if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled || recognizer.state == UIGestureRecognizerStateFailed) {

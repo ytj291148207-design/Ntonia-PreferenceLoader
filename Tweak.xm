@@ -11,7 +11,6 @@ extern "C" void PGDebugLog(NSString *format, ...);
 static NSString *const PGLogPath = @"/var/mobile/Media/PerfectGrabber.log";
 static NSLock *PGLogLock;
 static const void *PGPinnedCardGuardKey = &PGPinnedCardGuardKey;
-static IMP PGOriginalTongueWillDismissIMP = NULL;
 
 void PGDebugLog(NSString *format, ...) {
     va_list args; va_start(args, format);
@@ -51,176 +50,322 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     if(view&&window){CGRect r=[view convertRect:view.bounds toView:window];return CGRectGetMinY(r)<CGRectGetHeight(window.bounds)-CGRectGetMaxY(r);} return YES;
 }
 
-#pragma mark - One card: child of original pill, reparented on panel collapse
+#pragma mark - 卡片容器：只让卡片本身吃触摸，其余区域全部穿透
+
 @interface PGEdgeCardContainer : UIView
-@property(nonatomic,weak) PGGrabberOverlayView *card;
+@property (nonatomic, weak) PGGrabberOverlayView *card;
 @end
+
 @implementation PGEdgeCardContainer
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    PGGrabberOverlayView *card=self.card;
-    if(self.hidden||!card||card.hidden||!card.userInteractionEnabled)return nil;
-    CGPoint local=[card convertPoint:point fromView:self];
-    return [card pointInside:local withEvent:event]?[card hitTest:local withEvent:event]:nil;
-}
-- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    PGGrabberOverlayView *card=self.card;
-    if(!card||card.hidden)return NO;
-    CGPoint local=[card convertPoint:point fromView:self];
-    return [card pointInside:local withEvent:event];
+    PGGrabberOverlayView *card = self.card;
+    if (self.hidden || !card || card.hidden || !card.userInteractionEnabled) return nil;
+    CGPoint local = [card convertPoint:point fromView:self];
+    if (![card pointInside:local withEvent:event]) return nil;
+    UIView *hit = [card hitTest:local withEvent:event];
+    return hit ?: card;
 }
 @end
 
+/// 专用悬浮窗：层级高于 App 和原生面板，卡片关掉时整个窗口隐藏。
+/// hitTest 只放行 container 及其子视图，其余点一律返回 nil，让事件穿到下面的窗口。
+@interface PGOverlayWindow : UIWindow
+@property (nonatomic, weak) UIView *cardContainer;
+@end
+
+@implementation PGOverlayWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = [super hitTest:point withEvent:event];
+    if (!hit) return nil;
+    UIView *container = self.cardContainer;
+    for (UIView *view = hit; view; view = view.superview) {
+        if (view == container) return hit;
+    }
+    return nil;
+}
+@end
+
+#pragma mark - 宿主：卡片挂在窗口上，不再寄生在 SBGrabberTongue 的容器里
+//
+// 旧实现把卡片塞进 _tongueContainer，再改写它的 frame 去凑卡片大小。那条路必然出三个问题：
+//   1. SpringBoard 每次布局都会把 tongue 的 frame 重置回原生尺寸 —— 卡片被压回 44pt（"自己缩回"）；
+//   2. tongue 自己带 clipsToBounds，展开多出来的高度直接被裁掉（"长按没反应"）；
+//   3. 胶囊端头和箭头没被完全盖住，圆角外侧露出一块（截图右侧那个 ∧）。
+// 现在卡片是窗口层上的独立视图，位置和尺寸只由自己算，原生面板动不了它。
+
 @interface PGNativeCardHost : NSObject
-@property(nonatomic,strong) UIWindow *window;
-@property(nonatomic,strong) UIWindow *cardWindow;
-@property(nonatomic,weak) UIWindow *sourceWindow;
-@property(nonatomic,weak) UIView *host;
-@property(nonatomic,weak) UIView *parent;
-@property(nonatomic,weak) UIView *chevron;
-@property(nonatomic,weak) id grabber;
-@property(nonatomic,strong) NSValue *originalFrame;
-@property(nonatomic,strong) NSValue *anchorRect;
-@property(nonatomic,strong) NSMutableArray<NSDictionary *> *clipState;
-@property(nonatomic,strong) PGEdgeCardContainer *container;
-@property(nonatomic,strong) PGGrabberOverlayView *card;
-@property(nonatomic,assign) BOOL chevronWasHidden;
-@property(nonatomic,assign) BOOL hasChevronState;
-@property(nonatomic,assign) BOOL held;
-@property(nonatomic,assign) BOOL holdActive;
-@property(nonatomic,assign) CFTimeInterval releaseGrace;
-@property(nonatomic,assign) BOOL docked;
+@property (nonatomic, strong) PGEdgeCardContainer *container;
+@property (nonatomic, strong) PGGrabberOverlayView *card;
+@property (nonatomic, weak) UIWindow *window;
+@property (nonatomic, weak) UIWindow *panelWindow;
+@property (nonatomic, weak) id grabber;
+@property (nonatomic, weak) UIView *chevron;
+@property (nonatomic, assign) BOOL chevronWasHidden;
+@property (nonatomic, assign) BOOL hasChevronState;
+@property (nonatomic, assign) CGFloat anchorRatio;
+@property (nonatomic, assign) BOOL presented;
+@property (nonatomic, strong) UIWindow *overlayWindow;
 + (instancetype)shared;
-- (void)show:(UIView *)host chevron:(UIView *)chevron grabber:(id)grabber;
-- (void)refresh;
+- (void)presentFromHost:(UIView *)host chevron:(UIView *)chevron grabber:(id)grabber;
+- (void)keepAfterPanelDismiss;
 - (void)resizeForHeight:(CGFloat)height;
 - (void)longPressChanged:(BOOL)active;
-- (void)dockSameCardAfterDismiss;
+- (void)refresh;
 - (void)hide;
 @end
 
 @implementation PGNativeCardHost
-+ (instancetype)shared { static PGNativeCardHost *instance; static dispatch_once_t once; dispatch_once(&once,^{instance=[self new];}); return instance; }
 
-- (UIWindow *)persistentWindowForHost:(UIView *)host {
-    UIWindow *source=host.window; UIWindowScene *scene=source.windowScene;
-    if(self.cardWindow&&self.cardWindow.windowScene==scene)return self.cardWindow;
-    if(!scene)return source;
-    UIWindow *window=[[UIWindow alloc]initWithWindowScene:scene];
-    window.frame=scene.coordinateSpace.bounds;
-    window.windowLevel=UIWindowLevelStatusBar+1;
-    window.backgroundColor=UIColor.clearColor;
-    window.opaque=NO;
-    window.rootViewController=[UIViewController new];
-    window.rootViewController.view.backgroundColor=UIColor.clearColor;
-    window.rootViewController.view.userInteractionEnabled=YES;
-    self.cardWindow=window;
-    window.hidden=NO;
++ (instancetype)shared {
+    static PGNativeCardHost *instance;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ instance = [self new]; });
+    return instance;
+}
+
+#pragma mark 窗口与几何
+
+- (UIWindow *)mainWindowInScene:(UIWindowScene *)scene {
+    if (!scene) return nil;
+    UIWindow *fallback = nil;
+    for (UIWindow *window in scene.windows) {
+        if (window.hidden || window.windowLevel > UIWindowLevelNormal) continue;
+        NSString *name = NSStringFromClass(window.class);
+        if ([name containsString:@"MainDisplay"] || [name containsString:@"SBMainDisplay"]) return window;
+        if (!fallback) fallback = window;
+    }
+    return fallback;
+}
+
+- (CGFloat)preferredWidth {
+    CGFloat width = MAX(300.0, PerfectGrabberPreferences.sharedPreferences.cardWidth);
+    return self.card.isExpanded ? width : MIN(300.0, width);
+}
+
+- (CGRect)frameForWindow:(UIWindow *)window height:(CGFloat)height {
+    if (!window) return CGRectZero;
+    CGRect bounds = window.bounds;
+    UIEdgeInsets safe = window.safeAreaInsets;
+    CGFloat inset = MAX(5.0, MAX(safe.left, safe.right)) + 2.0;
+    CGFloat available = MAX(240.0, CGRectGetWidth(bounds) - inset * 2.0);
+    CGFloat width = MIN(available, self.preferredWidth);
+    CGFloat ratio = (self.anchorRatio > 0.08 && self.anchorRatio < 0.92) ? self.anchorRatio : 0.5;
+    CGFloat center = CGRectGetMinX(bounds) + CGRectGetWidth(bounds) * ratio;
+    CGFloat left = center - width * 0.5;
+    left = MAX(CGRectGetMinX(bounds) + inset, MIN(left, CGRectGetMaxX(bounds) - inset - width));
+    // 自建悬浮窗的 safeAreaInsets 偶尔是 0，退化成状态栏高度，避免卡片贴到屏幕最上沿
+    CGFloat topInset = safe.top > 1.0 ? safe.top : 22.0;
+    CGFloat top = CGRectGetMinY(bounds) + topInset + 4.0;
+    return CGRectMake(left, top, width, height);
+}
+
+- (void)attachToWindow:(UIWindow *)window {
+    if (!window || !self.card) return;
+    UIWindow *previous = self.window;
+    self.window = window;
+    if (!self.container) {
+        self.container = [[PGEdgeCardContainer alloc] initWithFrame:window.bounds];
+        self.container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        self.container.backgroundColor = UIColor.clearColor;
+        self.container.userInteractionEnabled = YES;
+        self.container.card = self.card;
+    }
+    if (self.container.superview != window) {
+        [self.container removeFromSuperview];
+        [window addSubview:self.container];
+    }
+    if (self.card.superview != self.container) {
+        [self.card removeFromSuperview];
+        [self.container addSubview:self.card];
+    }
+    self.container.frame = window.bounds;
+    self.container.hidden = NO;
+    self.card.hidden = NO;
+    [window bringSubviewToFront:self.container];
+    if ([window isKindOfClass:PGOverlayWindow.class]) {
+        ((PGOverlayWindow *)window).cardContainer = self.container;
+    }
+    if (previous && previous != window && [previous isKindOfClass:PGOverlayWindow.class]) {
+        ((PGOverlayWindow *)previous).cardContainer = nil;
+        previous.hidden = YES;
+    }
+}
+
+- (void)applyLayoutAnimated:(BOOL)animated {
+    if (!self.card || !self.window) return;
+    CGRect frame = [self frameForWindow:self.window height:[self.card heightForWidth:self.preferredWidth]];
+    void (^block)(void) = ^{
+        self.card.frame = frame;
+        [self.card setNeedsLayout];
+        [self.card layoutIfNeeded];
+    };
+    if (animated) {
+        [UIView animateWithDuration:0.26 delay:0
+                            options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut
+                         animations:block completion:nil];
+    } else {
+        block();
+    }
+}
+
+- (void)resizeForHeight:(CGFloat)height {
+    if (!self.card || !self.window) return;
+    CGRect frame = [self frameForWindow:self.window height:MAX(1.0, height)];
+    [UIView animateWithDuration:0.26 delay:0
+                        options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut
+                     animations:^{
+        self.card.frame = frame;
+        [self.card setNeedsLayout];
+        [self.card layoutIfNeeded];
+    } completion:nil];
+}
+
+#pragma mark 生命周期
+
+- (void)presentFromHost:(UIView *)host chevron:(UIView *)chevron grabber:(id)grabber {
+    if (!PerfectGrabberPreferences.sharedPreferences.isEnabled) { [self hide]; return; }
+    UIWindow *window = host.window;
+    if (!window) return;
+
+    self.panelWindow = window;
+    self.grabber = grabber;
+
+    if (chevron) {
+        if (self.chevron && self.chevron != chevron && self.hasChevronState) self.chevron.hidden = self.chevronWasHidden;
+        if (self.chevron != chevron) { self.chevronWasHidden = chevron.hidden; self.hasChevronState = YES; }
+        self.chevron = chevron;
+        CGRect rect = [chevron convertRect:chevron.bounds toView:window];
+        CGFloat windowWidth = MAX(CGRectGetWidth(window.bounds), 1.0);
+        if (!CGRectIsEmpty(rect)) self.anchorRatio = CGRectGetMidX(rect) / windowWidth;
+    }
+
+    if (!self.card) {
+        self.card = [[PGGrabberOverlayView alloc] initWithFrame:CGRectZero];
+        self.card.compactMode = YES;
+        __weak typeof(self) weak = self;
+        self.card.onClose = ^{ [weak hide]; };
+        self.card.onHeightChange = ^(CGFloat height) { [weak resizeForHeight:height]; };
+        self.card.onLongPressStateChange = ^(BOOL active) { [weak longPressChanged:active]; };
+    }
+
+    [self attachToWindow:window];
+    if (chevron) chevron.hidden = YES;
+    self.presented = YES;
+
+    [self refresh];
+    [self.card startUpdating];
+    if (PerfectGrabberPreferences.sharedPreferences.vibrationFeedback) AudioServicesPlaySystemSound(1519);
+    PGDebugLog(@"[PG] present in %@", NSStringFromClass(window.class));
+}
+
+/// 悬浮窗：只建一次，绑定到当前 windowScene。
+- (UIWindow *)overlayWindowForScene:(UIWindowScene *)scene {
+    if (!scene) return nil;
+    if (self.overlayWindow && self.overlayWindow.windowScene == scene) return self.overlayWindow;
+    PGOverlayWindow *window = [[PGOverlayWindow alloc] initWithWindowScene:scene];
+    if (!window) return nil;
+    window.windowLevel = UIWindowLevelAlert + 1.0;
+    window.backgroundColor = UIColor.clearColor;
+    window.opaque = NO;
+    UIViewController *controller = [UIViewController new];
+    controller.view.backgroundColor = UIColor.clearColor;
+    window.rootViewController = controller;
+    window.hidden = NO;
+    self.overlayWindow = window;
+    PGDebugLog(@"[PG] overlay window ready");
     return window;
 }
-- (void)saveAndDisableClipping {
-    if(self.clipState)return; self.clipState=[NSMutableArray array];
-    for(UIView *view=self.host.superview;view&&view!=self.sourceWindow;view=view.superview){[self.clipState addObject:@{@"view":view,@"clips":@(view.clipsToBounds)}];view.clipsToBounds=NO;}
+
+/// 原生下拉面板收起：把卡片搬到自己的悬浮窗，不销毁、不改展开状态。
+/// 面板自己的窗口在收起后可能被隐藏或重建，所以不能把卡片留在里面。
+- (void)keepAfterPanelDismiss {
+    if (!self.presented || !self.card) return;
+    UIWindowScene *scene = self.window.windowScene ?: self.panelWindow.windowScene;
+    UIWindow *target = [self overlayWindowForScene:scene] ?: [self mainWindowInScene:scene];
+    if (!target || target == self.window) return;
+    [self attachToWindow:target];
+    [self applyLayoutAnimated:NO];
+    if (self.chevron && self.hasChevronState) self.chevron.hidden = self.chevronWasHidden;
+    PGDebugLog(@"[PG] docked in %@", NSStringFromClass(target.class));
 }
-- (void)restoreClipping {
-    for(NSDictionary *entry in self.clipState){UIView *view=entry[@"view"];if(view)view.clipsToBounds=[entry[@"clips"]boolValue];}self.clipState=nil;
-}
-- (void)restoreClips { [self restoreClipping]; }
-- (CGFloat)preferredWidth {
-    CGFloat width=MAX(300.0,PerfectGrabberPreferences.sharedPreferences.cardWidth);
-    return self.card.isExpanded?width:MIN(300.0,width);
-}
-- (CGRect)frameForWindow:(UIWindow *)window height:(CGFloat)height {
-    if(!window)return CGRectZero;CGRect bounds=window.bounds;UIEdgeInsets safe=window.safeAreaInsets;
-    CGFloat inset=MAX(5.0,MAX(safe.left,safe.right));
-    CGFloat width=MIN(MAX(240.0,CGRectGetWidth(bounds)-2.0*inset),self.preferredWidth);
-    CGRect anchor=self.anchorRect.CGRectValue;UIView *chevron=self.chevron;
-    if(chevron.window==self.sourceWindow&&self.sourceWindow){CGRect r=[chevron convertRect:chevron.bounds toView:self.sourceWindow];anchor=[self.sourceWindow convertRect:r toView:window];self.anchorRect=[NSValue valueWithCGRect:anchor];}
-    else if(chevron.window==window){anchor=[chevron convertRect:chevron.bounds toView:window];self.anchorRect=[NSValue valueWithCGRect:anchor];}
-    CGFloat center=CGRectIsEmpty(anchor)?CGRectGetMidX(bounds):CGRectGetMidX(anchor);
-        CGFloat left=MAX(CGRectGetMinX(bounds)+inset,MIN(center-width*0.5,CGRectGetMaxX(bounds)-inset-width));
-    CGFloat top=CGRectGetMinY(bounds)+safe.top+4.0;
-    return CGRectMake(left,top,width,height);
-}
-- (void)deferAncestorTaps {
-    UIGestureRecognizer *hold=nil;for(UIGestureRecognizer *g in self.card.gestureRecognizers)if([g isKindOfClass:UILongPressGestureRecognizer.class]){hold=g;break;}if(!hold)return;
-    for(UIView *view=self.host;view;view=view.superview){
-        for(UIGestureRecognizer *recognizer in view.gestureRecognizers)if(recognizer!=hold&&[recognizer isKindOfClass:UITapGestureRecognizer.class])[recognizer requireGestureRecognizerToFail:hold];
-        if(view==self.sourceWindow)break;
-    }
-}
-- (void)show:(UIView *)host chevron:(UIView *)chevron grabber:(id)grabber {
-    UIWindow *source=host.window;if(!source||!host.superview)return;
-    BOOL newHost=(self.host!=host||!self.card);
-    if(self.card&&self.card.superview==self.cardWindow){self.card.hidden=NO;self.window=self.cardWindow;[self refresh];return;}
-    self.sourceWindow=source;self.host=host;self.parent=host.superview;self.grabber=grabber;
-    self.window=[self persistentWindowForHost:host];
-    if(!self.window)return;
-    self.window.hidden=NO;
-    if(newHost||!self.originalFrame)self.originalFrame=[NSValue valueWithCGRect:host.frame];
-    if(chevron&&self.chevron!=chevron){if(self.hasChevronState)self.chevron.hidden=self.chevronWasHidden;self.chevron=chevron;self.chevronWasHidden=chevron.hidden;self.hasChevronState=YES;}
-    else if(!self.chevron&&chevron){self.chevron=chevron;self.chevronWasHidden=chevron.hidden;self.hasChevronState=YES;}
-    UIView *anchor=chevron?:host;self.anchorRect=[NSValue valueWithCGRect:[anchor convertRect:anchor.bounds toView:source]];
-    if(!self.card){
-        self.card=[[PGGrabberOverlayView alloc]initWithFrame:host.bounds];self.card.compactMode=YES;
-        __weak typeof(self) weak=self;self.card.onClose=^{[weak hide];};
-        self.card.onHeightChange=^(CGFloat height){[weak resizeForHeight:height];};
-        self.card.onLongPressStateChange=^(BOOL active){[weak longPressChanged:active];};
-    }
-    [self.card removeFromSuperview];
-    self.card.deferNativeGrabberDismissal=YES;self.card.hidden=NO;if(self.chevron)self.chevron.hidden=YES;
-    [self.window addSubview:self.card];self.docked=YES;
-    [self refresh];[self.card startUpdating];
-    if(PerfectGrabberPreferences.sharedPreferences.vibrationFeedback)AudioServicesPlaySystemSound(1519);
-}
+
 - (void)refresh {
-    if(!self.card||!self.window)return;PerfectGrabberPreferences *p=PerfectGrabberPreferences.sharedPreferences;
-    if(!p.isEnabled){[self hide];return;}
-    self.card.cardScale=p.cardScale;self.card.blurAmount=p.cardBlur;self.card.backgroundOpacity=p.cardOpacity;self.card.cornerRadius=p.cardCornerRadius;
+    if (!self.card || !self.window) return;
+    PerfectGrabberPreferences *p = PerfectGrabberPreferences.sharedPreferences;
+    if (!p.isEnabled) { [self hide]; return; }
+    self.card.cardScale = p.cardScale;
+    self.card.blurAmount = p.cardBlur;
+    self.card.backgroundOpacity = p.cardOpacity;
+    self.card.cornerRadius = p.cardCornerRadius;
+    self.card.cornerStyle = p.cornerStyle;
     [self.card refreshAppearance];
-    CGRect frame=[self frameForWindow:self.window height:[self.card heightForWidth:self.preferredWidth]];
-    self.card.frame=frame;
-    [self.window bringSubviewToFront:self.card];
-    [self.card setNeedsLayout];
+    [self applyLayoutAnimated:NO];
 }
-- (void)resizeForHeight:(CGFloat)height {
-    if(!self.card||!self.window)return;
-    CGRect frame=[self frameForWindow:self.window height:height];
-    [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:^{self.card.frame=frame;[self.card layoutIfNeeded];} completion:nil];
-}
+
 - (void)longPressChanged:(BOOL)active {
-    self.holdActive=active;self.releaseGrace=0.0;self.card.deferNativeGrabberDismissal=YES;
-    if(self.grabber)objc_setAssociatedObject(self.grabber,PGPinnedCardGuardKey,active?@(-1.0):nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // 只作为"按住中"的标记：卡片已经不在面板的视图树里，不需要再跟原生手势抢。
+    self.card.deferNativeGrabberDismissal = active;
+    if (self.grabber) objc_setAssociatedObject(self.grabber, PGPinnedCardGuardKey,
+                                               active ? @(-1.0) : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
-- (void)dockSameCardAfterDismiss {
-    if(!self.card||!self.sourceWindow||!self.window)return;
-    self.cardWindow.hidden=NO;
-    self.window=self.cardWindow;
-    CGRect frame=[self frameForWindow:self.window height:[self.card heightForWidth:self.preferredWidth]];
-    [self.card removeFromSuperview];[self.container removeFromSuperview];self.container=nil;
-    self.card.frame=frame;self.card.hidden=NO;self.card.deferNativeGrabberDismissal=YES;self.docked=YES;
-    [self.window addSubview:self.card];[self.window bringSubviewToFront:self.card];
-    if(self.chevron)self.chevron.hidden=YES;
-    [self.card startUpdating];[self.card setNeedsLayout];
-}
+
 - (void)hide {
-    self.held=NO;self.releaseGrace=0.0;
-    if(self.grabber)objc_setAssociatedObject(self.grabber,PGPinnedCardGuardKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [self.card stopUpdating];[self.card removeFromSuperview];[self.container removeFromSuperview];self.container=nil;
-    if(self.cardWindow){self.cardWindow.hidden=YES;self.cardWindow.rootViewController=nil;self.cardWindow=nil;}
-    if(self.chevron&&self.hasChevronState)self.chevron.hidden=self.chevronWasHidden;
-    self.card.deferNativeGrabberDismissal=NO;self.card=nil;self.host=nil;self.parent=nil;self.window=nil;self.sourceWindow=nil;self.chevron=nil;self.grabber=nil;self.originalFrame=nil;self.anchorRect=nil;self.hasChevronState=NO;self.docked=NO;
+    PGGrabberOverlayView *card = self.card;
+    [card stopUpdating];
+    [card removeFromSuperview];
+    [self.container removeFromSuperview];
+    if (self.grabber) objc_setAssociatedObject(self.grabber, PGPinnedCardGuardKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (self.chevron && self.hasChevronState) self.chevron.hidden = self.chevronWasHidden;
+    if ([self.window isKindOfClass:PGOverlayWindow.class]) {
+        ((PGOverlayWindow *)self.window).cardContainer = nil;
+        self.window.hidden = YES;
+    }
+    self.overlayWindow.hidden = YES;
+    self.overlayWindow = nil;
+    self.card = nil;
+    self.container = nil;
+    self.grabber = nil;
+    self.chevron = nil;
+    self.hasChevronState = NO;
+    self.window = nil;
+    self.panelWindow = nil;
+    self.presented = NO;
+    PGDebugLog(@"[PG] hide");
 }
+
 @end
 
 static void PGPreferencesChanged(CFNotificationCenterRef center,void *observer,CFStringRef name,const void*object,CFDictionaryRef info){dispatch_async(dispatch_get_main_queue(),^{[PerfectGrabberPreferences.sharedPreferences reload];if(!PerfectGrabberPreferences.sharedPreferences.isEnabled)[[PGNativeCardHost shared]hide];else [[PGNativeCardHost shared]refresh];});}
+
 %group PerfectGrabberHooks
 %hook SBGrabberTongue
-- (void)_willPresent{%orig;[PerfectGrabberPreferences.sharedPreferences reload];if(!PerfectGrabberPreferences.sharedPreferences.isEnabled){[[PGNativeCardHost shared]hide];return;}if(!PGIsTopEdgeGrabber(self))return;UIView*host=PGTongueView(self);if(host.window)[[PGNativeCardHost shared]show:host chevron:PGTongueChevron(self) grabber:self];}
-- (void)_willDismiss{
-    PGNativeCardHost *state=[PGNativeCardHost shared];
+- (void)_willPresent{
     %orig;
-    __weak PGNativeCardHost *weakState=state;dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.28*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[weakState dockSameCardAfterDismiss];});
+    [PerfectGrabberPreferences.sharedPreferences reload];
+    if(!PerfectGrabberPreferences.sharedPreferences.isEnabled){[[PGNativeCardHost shared]hide];return;}
+    if(!PGIsTopEdgeGrabber(self))return;
+    UIView*host=PGTongueView(self);if(host.window)[[PGNativeCardHost shared]presentFromHost:host chevron:PGTongueChevron(self) grabber:self];
+}
+- (void)_willDismiss{
+    %orig;
+    // 面板收起只做一次换窗搬运：卡片保持展开状态，不销毁。
+    [[PGNativeCardHost shared] keepAfterPanelDismiss];
 }
 %end
 %end
-%ctor{@autoreleasepool{if(![NSProcessInfo.processInfo.processName isEqualToString:@"SpringBoard"])return;Class cls=NSClassFromString(@"SBGrabberTongue");if(cls&&class_getInstanceMethod(cls,@selector(_willPresent))&&class_getInstanceMethod(cls,@selector(_willDismiss))){PGOriginalTongueWillDismissIMP=method_getImplementation(class_getInstanceMethod(cls,@selector(_willDismiss)));%init(PerfectGrabberHooks,SBGrabberTongue=cls);}dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[PerfectGrabberPreferences.sharedPreferences reload];CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),NULL,PGPreferencesChanged,(__bridge CFStringRef)PGPreferencesChangedNotification,NULL,CFNotificationSuspensionBehaviorDeliverImmediately);});}}
+
+%ctor{
+    @autoreleasepool {
+        if (![NSProcessInfo.processInfo.processName isEqualToString:@"SpringBoard"]) return;
+        Class cls = NSClassFromString(@"SBGrabberTongue");
+        if (cls && class_getInstanceMethod(cls, @selector(_willPresent)) && class_getInstanceMethod(cls, @selector(_willDismiss))) {
+            %init(PerfectGrabberHooks, SBGrabberTongue = cls);
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [PerfectGrabberPreferences.sharedPreferences reload];
+            CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PGPreferencesChanged,
+                                           (__bridge CFStringRef)PGPreferencesChangedNotification, NULL,
+                                           CFNotificationSuspensionBehaviorDeliverImmediately);
+        });
+    }
+}
