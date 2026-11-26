@@ -384,11 +384,18 @@ static NSString *PGBundleIdentifierForPID(int pid) {
 
 #pragma mark 控制
 
+- (BOOL)canSeek {
+    PGLoadMediaRemote();
+    return PGMRSetElapsedTime != NULL && isfinite(self.duration) && self.duration > 0.0;
+}
+
 - (void)seekToElapsedTime:(double)seconds {
     PGLoadMediaRemote();
-    if(!PGMRSetElapsedTime||!isfinite(seconds))return;
-    double limit=self.duration>0?self.duration:1.0e12;
-    PGMRSetElapsedTime(MAX(0.0,MIN(seconds,limit)));
+    // Seeking without a valid timeline or the private API would silently target an
+    // arbitrary position. Keep the UI disabled and fail closed in the model too.
+    if (!PGMRSetElapsedTime || !isfinite(seconds) || !isfinite(self.duration) || self.duration <= 0.0) return;
+    double target = MAX(0.0, MIN(seconds, self.duration));
+    PGMRSetElapsedTime(target);
     [self refresh];
 }
 

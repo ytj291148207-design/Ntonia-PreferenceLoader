@@ -71,6 +71,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
     self.backgroundColor = UIColor.clearColor;
     self.clipsToBounds = YES;
+    self.layer.masksToBounds = YES;
     self.userInteractionEnabled = YES;
     self.layer.cornerCurve = kCACornerCurveContinuous;
     self.layer.borderWidth = 1.0 / MAX(UIScreen.mainScreen.scale, 1.0);
@@ -367,7 +368,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         CGFloat bs=24.0*scale,gap=4.0*scale,x=width-pad-(bs*3.0+gap*2.0),cy=y+4.0*scale;
         self.previousButton.frame=CGRectMake(x,cy,bs,bs);self.playPauseButton.frame=CGRectMake(x+bs+gap,cy,bs,bs);self.nextButton.frame=CGRectMake(x+(bs+gap)*2.0,cy,bs,bs);
         self.previousButton.hidden=NO;self.playPauseButton.hidden=NO;self.nextButton.hidden=NO;
-        if(PGNowPlaying.sharedInstance.duration>0.0){self.progressSlider.frame=CGRectMake(tx,height-18.0*scale,width-tx-pad,14.0*scale);self.progressSlider.hidden=NO;}else{self.progressSlider.frame=CGRectZero;self.progressSlider.hidden=YES;}
+        if(PGNowPlaying.sharedInstance.canSeek){self.progressSlider.frame=CGRectMake(tx,height-18.0*scale,width-tx-pad,14.0*scale);self.progressSlider.hidden=NO;}else{self.progressSlider.frame=CGRectZero;self.progressSlider.hidden=YES;}
         return;
     }
 
@@ -426,7 +427,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.titleLabel.frame = CGRectMake(textX, textY, textWidth, titleHeight);
     self.artistLabel.frame = CGRectMake(textX, textY + titleHeight, textWidth, artistHeight);
     self.lyricsLabel.frame = CGRectMake(textX, textY + titleHeight + artistHeight, textWidth, lyricsHeight);
-    if(self.compactMode&&self.isExpanded&&PGNowPlaying.sharedInstance.duration>0){CGFloat sx=textX,sy=height-19.0*scale;self.progressSlider.frame=CGRectMake(sx,sy,MAX(40.0,width-sx-pad),15.0*scale);self.progressSlider.hidden=NO;}else{self.progressSlider.frame=CGRectZero;self.progressSlider.hidden=YES;}
+    if(self.compactMode&&self.isExpanded&&PGNowPlaying.sharedInstance.canSeek){CGFloat sx=textX,sy=height-19.0*scale;self.progressSlider.frame=CGRectMake(sx,sy,MAX(40.0,width-sx-pad),15.0*scale);self.progressSlider.hidden=NO;}else{self.progressSlider.frame=CGRectZero;self.progressSlider.hidden=YES;}
 
     BOOL controlsVisible = self.isExpanded;
     self.previousButton.hidden = !controlsVisible;
@@ -518,9 +519,25 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
 #pragma mark - Gestures and controls
 
-- (void)progressBegan:(UISlider *)slider { self.isSeeking=YES; }
-- (void)progressChanged:(UISlider *)slider { self.displayedSeekElapsed=slider.value*PGNowPlaying.sharedInstance.duration; }
-- (void)progressEnded:(UISlider *)slider { [PGNowPlaying.sharedInstance seekToElapsedTime:slider.value*PGNowPlaying.sharedInstance.duration];self.isSeeking=NO; }
+- (void)progressBegan:(UISlider *)slider {
+    PGNowPlaying *nowPlaying = PGNowPlaying.sharedInstance;
+    if (nowPlaying.duration <= 0.0) { self.isSeeking = NO; return; }
+    self.isSeeking = YES;
+    self.displayedSeekElapsed = slider.value * nowPlaying.duration;
+}
+- (void)progressChanged:(UISlider *)slider {
+    double duration = PGNowPlaying.sharedInstance.duration;
+    if (!self.isSeeking || duration <= 0.0) return;
+    self.displayedSeekElapsed = slider.value * duration;
+}
+- (void)progressEnded:(UISlider *)slider {
+    double duration = PGNowPlaying.sharedInstance.duration;
+    if (self.isSeeking && duration > 0.0) {
+        self.displayedSeekElapsed = slider.value * duration;
+        [PGNowPlaying.sharedInstance seekToElapsedTime:self.displayedSeekElapsed];
+    }
+    self.isSeeking = NO;
+}
 
 - (void)handleCardLongPress:(UILongPressGestureRecognizer *)recognizer {
     if (recognizer.state == UIGestureRecognizerStateBegan) {

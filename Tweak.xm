@@ -128,7 +128,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     return CGRectMake(left,top,width,height);
 }
 - (void)deferAncestorTaps {
-    UIGestureRecognizer *hold=self.card.gestureRecognizers.firstObject;if(!hold)return;
+    UIGestureRecognizer *hold=nil;for(UIGestureRecognizer *g in self.card.gestureRecognizers)if([g isKindOfClass:UILongPressGestureRecognizer.class]){hold=g;break;}if(!hold)return;
     for(UIView *view=self.host;view;view=view.superview){
         for(UIGestureRecognizer *recognizer in view.gestureRecognizers)if(recognizer!=hold&&[recognizer isKindOfClass:UITapGestureRecognizer.class])[recognizer requireGestureRecognizerToFail:hold];
         if(view==self.sourceWindow)break;

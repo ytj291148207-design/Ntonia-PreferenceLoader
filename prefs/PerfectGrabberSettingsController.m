@@ -2,6 +2,7 @@
 #import <Preferences/PSSpecifier.h>
 #import <math.h>
 #import <spawn.h>
+#import <AudioToolbox/AudioToolbox.h>
 
 extern char **environ;
 
@@ -23,6 +24,7 @@ static void PGWriteValue(NSString *key, id value) {
 
 @interface PerfectGrabberSettingsController () <UIColorPickerViewControllerDelegate>
 @property (nonatomic, copy) NSString *activeColorKey;
+@property (nonatomic, assign) CFTimeInterval lastSliderHaptic;
 @end
 
 @implementation PerfectGrabberSettingsController
@@ -97,6 +99,13 @@ static void PGWriteValue(NSString *key, id value) {
 
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
     PGWriteValue([specifier propertyForKey:PSKeyNameKey], value);
+    if ([specifier cellType] == PSSliderCell) {
+        CFTimeInterval now = CACurrentMediaTime();
+        if (now - self.lastSliderHaptic >= 0.075) {
+            self.lastSliderHaptic = now;
+            AudioServicesPlaySystemSound(1519);
+        }
+    }
 }
 
 - (UIColor *)colorForHex:(NSString *)hex fallback:(UIColor *)fallback {
