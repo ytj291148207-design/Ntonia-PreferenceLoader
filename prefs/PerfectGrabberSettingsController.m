@@ -1,5 +1,4 @@
 #import "PerfectGrabberSettingsController.h"
-#import "../PerfectGrabberPreferences.h"
 #import <Preferences/PSSpecifier.h>
 #import <Preferences/PSSliderTableCell.h>
 #import <Preferences/PSControlTableCell.h>
@@ -15,6 +14,9 @@ static id PGReadValue(NSString *key, id fallback) {
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
                                                         (__bridge CFStringRef)PGDomain);
     return CFBridgingRelease(value) ?: fallback;
+}
+static BOOL PGSliderHapticsEnabled(void) {
+    return [PGReadValue(@"SliderHaptics", @YES) boolValue];
 }
 
 static void PGWriteValue(NSString *key, id value) {
@@ -116,7 +118,7 @@ static void PGWriteValue(NSString *key, id value) {
 }
 
 - (void)sliderValueChanged:(UISlider *)slider {
-    if (!PerfectGrabberPreferences.sharedPreferences.sliderHaptics) return;
+    if (!PGSliderHapticsEnabled()) return;
     NSString *key = slider.accessibilityIdentifier ?: @"slider";
     NSInteger step = lround((slider.value-slider.minimumValue)/MAX(0.001f,slider.maximumValue-slider.minimumValue)*MAX(1,slider.tag));
     NSNumber *previous = self.lastSliderSteps[key];
