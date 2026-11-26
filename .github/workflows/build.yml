@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths-ignore:
       - 'dist/**'
+      - 'GrabberCardRootHide/**'
   workflow_dispatch:
 
 permissions:
