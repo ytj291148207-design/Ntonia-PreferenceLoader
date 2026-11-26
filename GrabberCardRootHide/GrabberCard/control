@@ -1,0 +1,10 @@
+Package: com.grabbercard.tweak
+Name: GrabberCard 抓取卡片
+Version: 1.0.3
+Architecture: iphoneos-arm64
+Description: 游戏内下拉抓取卡片：时间/电量/温度/CPU + 歌词/进度条/播放控制
+Maintainer: GrabberCard
+Depends: mobilesubstrate (>= 0.9.5000), preferenceloader
+Section: Tweaks
+Author: GrabberCard
+Tag: role::hacker

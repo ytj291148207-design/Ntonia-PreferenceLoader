@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>entry</key>
+	<dict>
+		<key>cell</key>
+		<string>PSLinkCell</string>
+		<key>label</key>
+		<string>GrabberCard 抓取卡片</string>
+		<key>icon</key>
+		<string>GrabberCard.png</string>
+		<key>detail</key>
+		<string>GrabberCardSettingsController</string>
+		<key>bundle</key>
+		<string>GrabberCardSettings</string>
+		<key>isController</key>
+		<integer>1</integer>
+	</dict>
+</dict>
+</plist>
