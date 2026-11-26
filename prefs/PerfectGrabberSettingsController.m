@@ -72,15 +72,21 @@ static void PGWriteValue(NSString *key, id value) {
     if (_specifiers) return _specifiers;
     NSMutableArray *items = [NSMutableArray array];
     PSSpecifier *main = [PSSpecifier groupSpecifierWithName:@"顶部播放器卡片"];
-    [main setProperty:@"从顶部下拉触发。卡片固定在顶部；时间、电量、温度和 CPU 居中显示。长按展开播放控制和进度条，松手不会收回；只有点右上角 × 才关闭。"
+    [main setProperty:@"横屏游戏顶部播放器。时间、电量、温度、CPU 居中；歌曲/专辑/歌手和可用歌词常显。可选长按展开或控制常显，卡片不自动消失；右上角箭头只收起/展开卡片内容。"
                 forKey:PSFooterTextGroupKey];
     [items addObject:main];
     [items addObject:[self preferenceNamed:@"启用卡片" key:@"EnabledPerfectGrabber" defaultValue:@NO cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"震动反馈" key:@"VibrationFeedback" defaultValue:@YES cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"使用12小时制" key:@"Disable24H" defaultValue:@NO cell:PSSwitchCell]];
     [items addObject:[self preferenceNamed:@"显示充电图标" key:@"ChargingIcon" defaultValue:@YES cell:PSSwitchCell]];
+    [items addObject:[self preferenceNamed:@"在线查询歌词" key:@"LyricsLookupEnabled" defaultValue:@YES cell:PSSwitchCell]];
+    PSSpecifier *lyricsPrivacy = [PSSpecifier groupSpecifierWithName:nil];
+    [lyricsPrivacy setProperty:@"启用时仅把歌曲名、歌手、专辑和时长发给 LRCLIB 查询；不发送设备标识。播放器若未提供曲目元数据则不查询。关闭后只显示播放器原始歌词。" forKey:PSFooterTextGroupKey];
+    [items addObject:lyricsPrivacy];
 
     NSArray<NSDictionary *> *sliderOptions = @[
+        @{@"name":@"卡片高度", @"key":@"CardHeight", @"value":@200.0, @"min":@168.0, @"max":@320.0, @"help":@"调整展开状态的卡片高度；收起态为紧凑歌曲信息胶囊。"},
+        @{@"name":@"字体粗细", @"key":@"FontWeight", @"value":@0.65, @"min":@0.0, @"max":@1.0, @"help":@"设置文字从纤细到加粗。"},
         @{@"name":@"卡片宽度", @"key":@"CardWidth", @"value":@460.0, @"min":@300.0, @"max":@800.0, @"help":@"调整顶部卡片横向宽度；超出屏幕时自动限制在安全范围内。"},
         @{@"name":@"卡片缩放", @"key":@"CardScale", @"value":@1.0, @"min":@0.7, @"max":@1.6, @"help":@"同步调整卡片内容、图标和高度。"},
         @{@"name":@"字体大小", @"key":@"FontSize", @"value":@15.0, @"min":@9.0, @"max":@24.0, @"help":@"调整时间、状态和歌曲信息的文字大小。"},
@@ -97,6 +103,9 @@ static void PGWriteValue(NSString *key, id value) {
         [slider setProperty:option[@"max"] forKey:PSControlMaximumKey];
         [items addObject:slider];
     }
+    NSArray *controlModeNames = @[@"长按显示进度和控制", @"默认显示进度和控制"];
+    NSInteger controlMode = MAX(0, MIN(1, [PGReadValue(@"ControlsDisplayMode", @0) integerValue]));
+    [items addObject:[self buttonNamed:[NSString stringWithFormat:@"播放控制：%@（点击切换）", controlModeNames[controlMode]] action:@selector(cycleControlsDisplayMode)]];
     NSArray *cornerStyleNames = @[@"统一圆角", @"收起胶囊", @"全部胶囊", @"小圆角"];
     NSInteger cornerStyle = MAX(0, MIN(3, [PGReadValue(@"CornerStyle", @0) integerValue]));
     [items addObject:[self buttonNamed:[NSString stringWithFormat:@"圆角样式：%@（点击切换）", cornerStyleNames[cornerStyle]]
@@ -217,6 +226,13 @@ static const void *PGSliderLastStepKey = &PGSliderLastStepKey;
     [self presentViewController:picker animated:YES completion:nil];
 }
 
+- (void)cycleControlsDisplayMode {
+    NSInteger current = [PGReadValue(@"ControlsDisplayMode", @0) integerValue];
+    PGWriteValue(@"ControlsDisplayMode", @((current + 1) % 2));
+    _specifiers = nil;
+    [self reloadSpecifiers];
+}
+
 - (void)cycleCornerStyle {
     NSInteger current = [PGReadValue(@"CornerStyle", @0) integerValue];
     PGWriteValue(@"CornerStyle", @((current + 1) % 4));
@@ -262,9 +278,10 @@ static const void *PGSliderLastStepKey = &PGSliderLastStepKey;
 }
 
 - (void)onResetSettings {
-    NSArray *keys = @[@"EnabledPerfectGrabber", @"VibrationFeedback", @"Disable24H", @"ChargingIcon",
+    NSArray *keys = @[@"EnabledPerfectGrabber", @"VibrationFeedback", @"Disable24H", @"ChargingIcon", @"LyricsLookupEnabled",
                       @"FontSize", @"TextColor", @"CardWidth", @"CardScale",
-                      @"CardBlur", @"CardOpacity", @"CardCornerRadius", @"CornerStyle", @"BackgroundMode"];
+                      @"CardBlur", @"CardOpacity", @"CardCornerRadius", @"CornerStyle", @"BackgroundMode",
+                      @"CardHeight", @"FontWeight", @"ControlsDisplayMode"];
     for (NSString *key in keys) {
         CFPreferencesSetAppValue((__bridge CFStringRef)key, NULL, (__bridge CFStringRef)PGDomain);
     }

@@ -1,4 +1,5 @@
 #import "PGNowPlaying.h"
+#import "PerfectGrabberPreferences.h"
 #import <dlfcn.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -102,6 +103,8 @@ static NSString *PGBundleIdentifierForPID(int pid) {
 @property (nonatomic, assign, getter=isPlaying) BOOL playing;
 @property (nonatomic, copy, nullable) NSString *title;
 @property (nonatomic, copy, nullable) NSString *artist;
+@property (nonatomic, copy, nullable) NSString *album;
+@property (nonatomic, copy, nullable) NSString *lyrics;
 @property (nonatomic, copy, nullable) NSString *bundleIdentifier;
 @property (nonatomic, copy, nullable) NSString *frontmostBundleIdentifier;
 @property (nonatomic, assign) double elapsed;
@@ -122,6 +125,13 @@ static NSString *PGBundleIdentifierForPID(int pid) {
 @property (nonatomic, assign) double lastRate;
 /// "字典里没有标题"的键清单只打一次，别刷屏。
 @property (nonatomic, assign) BOOL loggedEmptyTitleKeys;
+@property (nonatomic, assign) BOOL isFetchingLyrics;
+@property (nonatomic, copy) NSString *lastLyricsQuery;
+@property (nonatomic, copy) NSString *lyricsQueryKey;
+@property (nonatomic, strong) NSURLSessionDataTask *lyricsTask;
+@property (nonatomic, strong) NSCache<NSString *, NSString *> *lyricsCache;
+@property (nonatomic, strong) NSDate *lastLyricsQueryDate;
+@property (nonatomic, assign) NSUInteger lyricsRequestGeneration;
 @end
 
 @implementation PGNowPlaying
@@ -140,6 +150,8 @@ static NSString *PGBundleIdentifierForPID(int pid) {
     if (self) {
         _signature = @"";
         _queue = dispatch_queue_create("com.netskao.perfectgrabber.nowplaying", DISPATCH_QUEUE_SERIAL);
+        _lyricsCache = [NSCache new];
+        _lastLyricsQuery = @"";
     }
     return self;
 }
@@ -279,10 +291,62 @@ static NSString *PGBundleIdentifierForPID(int pid) {
     }
 }
 
+- (void)resolveLyricsIfNeeded {
+    if (![PerfectGrabberPreferences.sharedPreferences lyricsLookupEnabled] || !self.title.length) return;
+    NSString *query = [NSString stringWithFormat:@"%@|%@|%@", self.title ?: @"", self.artist ?: @"", self.album ?: @""];
+    NSString *cacheKey = [NSString stringWithFormat:@"%@|%.0f", query, self.duration];
+    if ([query isEqualToString:self.lastLyricsQuery]) return;
+    if (self.isFetchingLyrics) return;
+    NSString *cached = [self.lyricsCache objectForKey:cacheKey];
+    if (cached) { self.lastLyricsQuery=query; if (cached.length && !self.lyrics.length) self.lyrics = cached; return; }
+    if (self.lastLyricsQueryDate && -[self.lastLyricsQueryDate timeIntervalSinceNow] < 2.0) return;
+    self.lastLyricsQuery = query;
+    self.lastLyricsQueryDate = NSDate.date;
+    self.isFetchingLyrics = YES;
+    NSUInteger requestGeneration = ++self.lyricsRequestGeneration;
+    NSURLComponents *parts = [NSURLComponents componentsWithString:@"https://lrclib.net/api/get"];
+    parts.queryItems = @[[NSURLQueryItem queryItemWithName:@"track_name" value:self.title ?: @""],
+                         [NSURLQueryItem queryItemWithName:@"artist_name" value:self.artist ?: @""],
+                         [NSURLQueryItem queryItemWithName:@"album_name" value:self.album ?: @""],
+                         [NSURLQueryItem queryItemWithName:@"duration" value:(self.duration > 0 ? [NSString stringWithFormat:@"%.0f",self.duration] : @"")]];
+    if (!parts.URL) { self.isFetchingLyrics = NO; return; }
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:parts.URL];
+    request.timeoutInterval = 5.0;
+    [request setValue:@"PerfectGrabber/1.1" forHTTPHeaderField:@"User-Agent"];
+    __weak typeof(self) weakSelf = self;
+    self.lyricsTask = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        PGNowPlaying *strongSelf = weakSelf; if (!strongSelf) return;
+        NSString *found = nil;
+        if (!error && data.length && ((NSHTTPURLResponse *)response).statusCode == 200) {
+            id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if ([json isKindOfClass:NSDictionary.class]) {
+                id value = json[@"syncedLyrics"] ?: json[@"plainLyrics"];
+                if ([value isKindOfClass:NSString.class]) found = value;
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (requestGeneration != strongSelf.lyricsRequestGeneration) return;
+            strongSelf.isFetchingLyrics = NO;
+            [strongSelf.lyricsCache setObject:(found ?: @"") forKey:cacheKey];
+            if ([strongSelf.lastLyricsQuery isEqualToString:query] && found.length) {
+                strongSelf.lyrics = found;
+                [strongSelf notifyIfChanged];
+            }
+        });
+    }];
+    [self.lyricsTask resume];
+}
+
 - (void)applyInformation:(NSDictionary *)dictionary {
     if (!dictionary) {
         self.title = nil;
         self.artist = nil;
+        self.album = nil;
+        self.lyrics = nil;
+        self.lyricsQueryKey = nil;
+        self.lastLyricsQuery = nil;
+        self.lyricsRequestGeneration++;
+        [self.lyricsTask cancel]; self.lyricsTask=nil; self.isFetchingLyrics=NO;
         self.ratePositive = NO;
         self.elapsedAdvancing = NO;
         self.hasElapsedSample = NO;
@@ -298,6 +362,9 @@ static NSString *PGBundleIdentifierForPID(int pid) {
     id album = dictionary[@"kMRMediaRemoteNowPlayingInfoAlbum"];
     NSString *resolvedTitle = [title isKindOfClass:NSString.class] ? title : nil;
     self.artist = [artist isKindOfClass:NSString.class] ? artist : nil;
+    self.album = [album isKindOfClass:NSString.class] ? album : nil;
+    id lyrics = dictionary[@"kMRMediaRemoteNowPlayingInfoLyrics"] ?: dictionary[@"Lyrics"];
+    NSString *playerLyrics = [lyrics isKindOfClass:NSString.class] ? lyrics : nil;
     if (resolvedTitle.length == 0) {
         // 有的 App 只填专辑名；再不行就把字典里到底有哪些键打出来，下次一眼能看出差在哪。
         if ([album isKindOfClass:NSString.class] && [album length]) {
@@ -306,6 +373,16 @@ static NSString *PGBundleIdentifierForPID(int pid) {
             self.loggedEmptyTitleKeys = YES;
             PGDebugLog(@"NowPlaying: 信息里没有标题，键=%@", [dictionary.allKeys componentsJoinedByString:@","]);
         }
+    }
+    NSString *songKey = [NSString stringWithFormat:@"%@|%@|%@", resolvedTitle ?: @"", self.artist ?: @"", self.album ?: @""];
+    if (![songKey isEqualToString:self.lyricsQueryKey]) {
+        self.lyrics = playerLyrics;
+        self.lastLyricsQuery = nil;
+        self.lyricsQueryKey = songKey;
+        self.lyricsRequestGeneration++;
+        [self.lyricsTask cancel]; self.lyricsTask=nil; self.isFetchingLyrics=NO;
+    } else if (playerLyrics.length) {
+        self.lyrics = playerLyrics;
     }
     self.title = resolvedTitle;
 
@@ -346,6 +423,7 @@ static NSString *PGBundleIdentifierForPID(int pid) {
     id artwork = dictionary[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
     self.artworkData = [artwork isKindOfClass:NSData.class] ? artwork : nil;
 
+    if (!self.lyrics.length) [self resolveLyricsIfNeeded];
     [self recomputePlaying];
 }
 
@@ -363,11 +441,9 @@ static NSString *PGBundleIdentifierForPID(int pid) {
 }
 
 - (void)notifyIfChanged {
-    NSString *signature = [NSString stringWithFormat:@"%d|%@|%@|%@|%@",
-                           self.playing,
-                           self.title ?: @"", self.artist ?: @"",
-                           self.bundleIdentifier ?: @"",
-                           self.frontmostBundleIdentifier ?: @""];
+    NSString *signature = [NSString stringWithFormat:@"%d|%@|%@|%@|%@|%@|%@",
+                           self.playing, self.title ?: @"", self.artist ?: @"", self.album ?: @"", self.lyrics ?: @"",
+                           self.bundleIdentifier ?: @"", self.frontmostBundleIdentifier ?: @""];
     if ([signature isEqualToString:self.signature]) return;
     BOOL firstTime = self.signature.length == 0;
     self.signature = signature;

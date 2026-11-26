@@ -23,6 +23,9 @@ typedef NS_ENUM(NSInteger, PGMediaCommand) {
 @property (nonatomic, readonly, getter=isPlaying) BOOL playing;
 @property (nonatomic, copy, readonly, nullable) NSString *title;
 @property (nonatomic, copy, readonly, nullable) NSString *artist;
+@property (nonatomic, copy, readonly, nullable) NSString *album;
+/// 部分播放器可能在 Now Playing 字典中提供歌词；系统通常不提供逐字歌词。
+@property (nonatomic, copy, readonly, nullable) NSString *lyrics;
 /// 正在播放的 App（可能是音乐 App，也可能是视频 App）。
 @property (nonatomic, copy, readonly, nullable) NSString *bundleIdentifier;
 /// 当前前台 App。和上一项不同就说明音乐在后台放 —— 也就是"玩游戏在听歌"。
