@@ -75,7 +75,7 @@ jobs:
           export LDID="$HOME/theos/bin/ldid"
           chmod +x GrabberCardRootHide/GrabberCard/build-roothide.sh
           GrabberCardRootHide/GrabberCard/build-roothide.sh
-          cp GrabberCardRootHide/GrabberCard/dist/*.deb dist/
+          cp GrabberCardRootHide/dist/*.deb dist/
           shasum -a 256 dist/GrabberCard_*.deb
 
       - name: Build rootless
