@@ -102,7 +102,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     [self addSubview:_tintView];
     [self insertSubview:_gaussianBlurBackdrop belowSubview:_blurView];
 
-    _timeLabel = [self newLabelWithWeight:UIFontWeightSemibold alignment:NSTextAlignmentLeft];
+    _timeLabel = [self newLabelWithWeight:UIFontWeightSemibold alignment:NSTextAlignmentCenter];
     _timeLabel.adjustsFontSizeToFitWidth = YES;
     _timeLabel.minimumScaleFactor = 0.70;
     [self addSubview:_timeLabel];
@@ -310,7 +310,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.tintView.backgroundColor = [UIColor colorWithWhite:0.0
                                                       alpha:PGClamp(self.backgroundOpacity, 0.0, 1.0)];
     self.blurView.hidden = NO;
-    self.layer.cornerRadius = MAX(0.0, self.cornerRadius * self.cardScale);
+    self.layer.cornerRadius = MIN(MIN(CGRectGetWidth(self.bounds),CGRectGetHeight(self.bounds))*0.5,MAX(0.0,self.cornerRadius*self.cardScale));
+    self.layer.cornerCurve = kCACornerCurveContinuous;
     self.blurView.layer.cornerRadius = self.layer.cornerRadius;
     self.blurView.clipsToBounds = YES;
     self.blurView.layer.masksToBounds = YES;
@@ -351,7 +352,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     CGFloat width = CGRectGetWidth(self.bounds);
     CGFloat height = CGRectGetHeight(self.bounds);
     CGFloat scale = PGClamp(self.cardScale, 0.65, 1.50);
-    self.layer.cornerRadius = MAX(0.0, self.cornerRadius * scale);
+    self.layer.cornerRadius = MIN(MIN(width,height)*0.5,MAX(0.0,self.cornerRadius*scale));
+    self.layer.cornerCurve = kCACornerCurveContinuous;
     self.blurView.frame = self.bounds; self.blurView.layer.cornerRadius=self.layer.cornerRadius;
     self.gaussianBlurBackdrop.frame = self.bounds; self.gaussianBlurBackdrop.layer.cornerRadius=self.layer.cornerRadius;
     self.tintView.frame = self.bounds; self.tintView.layer.cornerRadius=self.layer.cornerRadius;

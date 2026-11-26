@@ -62,10 +62,17 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     CGPoint local=[card convertPoint:point fromView:self];
     return [card pointInside:local withEvent:event]?[card hitTest:local withEvent:event]:nil;
 }
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    PGGrabberOverlayView *card=self.card;
+    if(!card||card.hidden)return NO;
+    CGPoint local=[card convertPoint:point fromView:self];
+    return [card pointInside:local withEvent:event];
+}
 @end
 
 @interface PGNativeCardHost : NSObject
 @property(nonatomic,strong) UIWindow *window;
+@property(nonatomic,strong) UIWindow *cardWindow;
 @property(nonatomic,weak) UIWindow *sourceWindow;
 @property(nonatomic,weak) UIView *host;
 @property(nonatomic,weak) UIView *parent;
@@ -96,11 +103,19 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 
 - (UIWindow *)persistentWindowForHost:(UIView *)host {
     UIWindow *source=host.window; UIWindowScene *scene=source.windowScene;
-    if(scene){
-        for(UIWindow *window in scene.windows){NSString *name=NSStringFromClass(window.class);if(!window.hidden&&([name containsString:@"MainDisplay"]||[name containsString:@"SBMainDisplay"]))return window;}
-        for(UIWindow *window in scene.windows)if(!window.hidden&&window.windowLevel<=UIWindowLevelNormal&&window!=source)return window;
-    }
-    return source;
+    if(self.cardWindow&&self.cardWindow.windowScene==scene)return self.cardWindow;
+    if(!scene)return source;
+    UIWindow *window=[[UIWindow alloc]initWithWindowScene:scene];
+    window.frame=scene.coordinateSpace.bounds;
+    window.windowLevel=UIWindowLevelStatusBar+1;
+    window.backgroundColor=UIColor.clearColor;
+    window.opaque=NO;
+    window.rootViewController=[UIViewController new];
+    window.rootViewController.view.backgroundColor=UIColor.clearColor;
+    window.rootViewController.view.userInteractionEnabled=YES;
+    self.cardWindow=window;
+    window.hidden=NO;
+    return window;
 }
 - (void)saveAndDisableClipping {
     if(self.clipState)return; self.clipState=[NSMutableArray array];
@@ -136,8 +151,11 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (void)show:(UIView *)host chevron:(UIView *)chevron grabber:(id)grabber {
     UIWindow *source=host.window;if(!source||!host.superview)return;
     BOOL newHost=(self.host!=host||!self.card);
-    if(self.card&&self.docked){[self.card removeFromSuperview];[self.container removeFromSuperview];self.container=nil;self.docked=NO;}
-    self.sourceWindow=source;self.window=source;self.host=host;self.parent=host.superview;self.grabber=grabber;
+    if(self.card&&self.card.superview==self.cardWindow){self.card.hidden=NO;self.window=self.cardWindow;[self refresh];return;}
+    self.sourceWindow=source;self.host=host;self.parent=host.superview;self.grabber=grabber;
+    self.window=[self persistentWindowForHost:host];
+    if(!self.window)return;
+    self.window.hidden=NO;
     if(newHost||!self.originalFrame)self.originalFrame=[NSValue valueWithCGRect:host.frame];
     if(chevron&&self.chevron!=chevron){if(self.hasChevronState)self.chevron.hidden=self.chevronWasHidden;self.chevron=chevron;self.chevronWasHidden=chevron.hidden;self.hasChevronState=YES;}
     else if(!self.chevron&&chevron){self.chevron=chevron;self.chevronWasHidden=chevron.hidden;self.hasChevronState=YES;}
@@ -148,9 +166,10 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         self.card.onHeightChange=^(CGFloat height){[weak resizeForHeight:height];};
         self.card.onLongPressStateChange=^(BOOL active){[weak longPressChanged:active];};
     }
-    if(self.card.superview!=host){[self.card removeFromSuperview];[host addSubview:self.card];self.docked=NO;}
+    [self.card removeFromSuperview];
     self.card.deferNativeGrabberDismissal=YES;self.card.hidden=NO;if(self.chevron)self.chevron.hidden=YES;
-    [self saveAndDisableClipping];[self deferAncestorTaps];[self refresh];[self.card startUpdating];
+    [self.window addSubview:self.card];self.docked=YES;
+    [self refresh];[self.card startUpdating];
     if(PerfectGrabberPreferences.sharedPreferences.vibrationFeedback)AudioServicesPlaySystemSound(1519);
 }
 - (void)refresh {
@@ -159,40 +178,37 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     self.card.cardScale=p.cardScale;self.card.blurAmount=p.cardBlur;self.card.backgroundOpacity=p.cardOpacity;self.card.cornerRadius=p.cardCornerRadius;
     [self.card refreshAppearance];
     CGRect frame=[self frameForWindow:self.window height:[self.card heightForWidth:self.preferredWidth]];
-    if(self.card.superview==self.host&&self.host.superview==self.parent){self.host.frame=[self.window convertRect:frame toView:self.parent];self.card.frame=self.host.bounds;}
-    else if(self.card.superview==self.container){self.container.frame=self.window.bounds;self.card.frame=frame;}
+    self.card.frame=frame;
+    [self.window bringSubviewToFront:self.card];
     [self.card setNeedsLayout];
 }
 - (void)resizeForHeight:(CGFloat)height {
-    if(self.card.superview==self.container){CGRect frame=[self frameForWindow:self.window height:height];[UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:^{self.card.frame=frame;[self.card layoutIfNeeded];} completion:nil];return;}
-    if(!self.host||!self.parent||!self.window||self.card.superview!=self.host)return;
-    CGRect frame=[self.window convertRect:[self frameForWindow:self.window height:height] toView:self.parent];
-    [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:^{self.host.frame=frame;self.card.frame=self.host.bounds;[self.card layoutIfNeeded];} completion:nil];
+    if(!self.card||!self.window)return;
+    CGRect frame=[self frameForWindow:self.window height:height];
+    [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:^{self.card.frame=frame;[self.card layoutIfNeeded];} completion:nil];
 }
 - (void)longPressChanged:(BOOL)active {
     self.holdActive=active;self.releaseGrace=0.0;self.card.deferNativeGrabberDismissal=YES;
     if(self.grabber)objc_setAssociatedObject(self.grabber,PGPinnedCardGuardKey,active?@(-1.0):nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 - (void)dockSameCardAfterDismiss {
-    if(!self.card||!self.sourceWindow||self.docked)return;
-    UIWindow *targetWindow=[self persistentWindowForHost:self.host]?:self.sourceWindow;
-    CGRect target=[self frameForWindow:targetWindow height:[self.card heightForWidth:self.preferredWidth]];
-    [self.card removeFromSuperview];
-    if(self.host&&self.parent&&self.host.superview==self.parent&&self.originalFrame)self.host.frame=self.originalFrame.CGRectValue;
-    [self restoreClipping];
-    if(!self.container){self.container=[[PGEdgeCardContainer alloc]initWithFrame:targetWindow.bounds];self.container.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;self.container.backgroundColor=UIColor.clearColor;self.container.userInteractionEnabled=YES;self.container.card=self.card;}
-    self.window=targetWindow;[self.window addSubview:self.container];[self.container addSubview:self.card];self.container.frame=self.window.bounds;
-    self.card.frame=target;self.card.hidden=NO;self.card.deferNativeGrabberDismissal=NO;self.docked=YES;
-    if(self.chevron)self.chevron.hidden=YES;[self.window bringSubviewToFront:self.container];[self.card startUpdating];[self.card setNeedsLayout];
-    if(self.grabber)objc_setAssociatedObject(self.grabber,PGPinnedCardGuardKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if(!self.card||!self.sourceWindow||!self.window)return;
+    self.cardWindow.hidden=NO;
+    self.window=self.cardWindow;
+    CGRect frame=[self frameForWindow:self.window height:[self.card heightForWidth:self.preferredWidth]];
+    [self.card removeFromSuperview];[self.container removeFromSuperview];self.container=nil;
+    self.card.frame=frame;self.card.hidden=NO;self.card.deferNativeGrabberDismissal=YES;self.docked=YES;
+    [self.window addSubview:self.card];[self.window bringSubviewToFront:self.card];
+    if(self.chevron)self.chevron.hidden=YES;
+    [self.card startUpdating];[self.card setNeedsLayout];
 }
 - (void)hide {
     self.held=NO;self.releaseGrace=0.0;
     if(self.grabber)objc_setAssociatedObject(self.grabber,PGPinnedCardGuardKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [self.card stopUpdating];[self.card removeFromSuperview];[self.container removeFromSuperview];
-    if(self.host&&self.parent&&self.host.superview==self.parent&&self.originalFrame)self.host.frame=self.originalFrame.CGRectValue;
-    [self restoreClips];if(self.chevron&&self.hasChevronState)self.chevron.hidden=self.chevronWasHidden;
-    self.card.deferNativeGrabberDismissal=NO;self.card=nil;self.container=nil;self.host=nil;self.parent=nil;self.window=nil;self.sourceWindow=nil;self.chevron=nil;self.grabber=nil;self.originalFrame=nil;self.anchorRect=nil;self.hasChevronState=NO;self.docked=NO;
+    [self.card stopUpdating];[self.card removeFromSuperview];[self.container removeFromSuperview];self.container=nil;
+    if(self.cardWindow){self.cardWindow.hidden=YES;self.cardWindow.rootViewController=nil;self.cardWindow=nil;}
+    if(self.chevron&&self.hasChevronState)self.chevron.hidden=self.chevronWasHidden;
+    self.card.deferNativeGrabberDismissal=NO;self.card=nil;self.host=nil;self.parent=nil;self.window=nil;self.sourceWindow=nil;self.chevron=nil;self.grabber=nil;self.originalFrame=nil;self.anchorRect=nil;self.hasChevronState=NO;self.docked=NO;
 }
 @end
 
