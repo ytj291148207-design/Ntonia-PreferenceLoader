@@ -20,12 +20,58 @@
 @interface PSSpecifier : NSObject
 + (instancetype)preferenceSpecifierNamed:(NSString *)name
                                   target:(id)target
-                                  setter:(SEL)setter
+                                     set:(SEL)setter
+                                     get:(SEL)getter
                                   detail:(Class)detail
-                                     cell:(Class)cell
+                                     cell:(NSInteger)cell
                                      edit:(Class)edit;
 - (void)setProperty:(id)value forKey:(NSString *)key;
 - (id)propertyForKey:(NSString *)key;
+@end
+
+// Settings calls a legacy, class-based convenience selector below. Translate
+// it to Apple's real PSSpecifier API (set:get:... with a PSCellType integer).
+static NSString *const PGCustomCellKey = @"PGCustomCellClass";
+
+@interface PSSpecifier (GrabberCardFactory)
++ (instancetype)preferenceSpecifierNamed:(NSString *)name
+                                  target:(id)target
+                                  setter:(SEL)setter
+                                  detail:(Class)detail
+                                     cell:(Class)cellClass
+                                     edit:(Class)edit;
+@end
+
+@implementation PSSpecifier (GrabberCardFactory)
++ (instancetype)preferenceSpecifierNamed:(NSString *)name
+                                  target:(id)target
+                                  setter:(SEL)setter
+                                  detail:(Class)detail
+                                     cell:(Class)cellClass
+                                     edit:(Class)edit {
+    NSString *customClassName = NSStringFromClass(cellClass);
+    NSInteger systemCell = 7; // PSStaticTextCell
+    if ([customClassName isEqualToString:@"PGGroupCell"]) systemCell = 0; // PSGroupCell
+    else if ([customClassName isEqualToString:@"PGHeaderCell"]) systemCell = 7; // PSStaticTextCell
+    else if ([customClassName isEqualToString:@"PGSwitchCell"]) systemCell = 6; // PSSwitchCell
+    else if ([customClassName isEqualToString:@"PGSliderCell"]) systemCell = 5; // PSSliderCell
+    else if ([customClassName isEqualToString:@"PGSegmentCell"]) systemCell = 9; // PSSegmentCell
+    else if ([customClassName isEqualToString:@"PGButtonCell"]) systemCell = 13; // PSButtonCell
+
+    SEL getter = target ? @selector(readPreferenceValue:) : NULL;
+    PSSpecifier *specifier = [self preferenceSpecifierNamed:name
+                                                      target:target
+                                                         set:setter
+                                                         get:getter
+                                                      detail:detail
+                                                        cell:systemCell
+                                                        edit:edit];
+    if (specifier) {
+        if (customClassName) [specifier setProperty:customClassName forKey:PGCustomCellKey];
+        if (name) [specifier setProperty:name forKey:@"label"];
+    }
+    return specifier;
+}
 @end
 
 @interface PSListController : UITableViewController
@@ -583,7 +629,7 @@ static UIColor *PGSettingsAccent(void) {
         return [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"GrabberCardBlank"];
     }
     PSSpecifier *specifier = specs[indexPath.row];
-    NSString *cellName = [specifier propertyForKey:@"cell"] ?: [specifier propertyForKey:@"cellType"];
+    NSString *cellName = [specifier propertyForKey:PGCustomCellKey];
     Class cellClass = cellName ? NSClassFromString(cellName) : Nil;
     if (!cellClass) cellClass = [UITableViewCell class];
 
@@ -609,7 +655,7 @@ static UIColor *PGSettingsAccent(void) {
     NSArray *specs = self.specifiers;
     if ((NSUInteger)indexPath.row >= specs.count) return 44.0;
     PSSpecifier *specifier = specs[indexPath.row];
-    NSString *name = [specifier propertyForKey:@"cell"] ?: [specifier propertyForKey:@"cellType"];
+    NSString *name = [specifier propertyForKey:PGCustomCellKey];
     if ([name isEqualToString:@"PGHeaderCell"]) return 116.0;
     if ([name isEqualToString:@"PGSliderCell"]) return 76.0;
     if ([name isEqualToString:@"PGSegmentCell"]) return 82.0;

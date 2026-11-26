@@ -97,16 +97,16 @@ install_name_tool -id '@loader_path/.jbroot/Library/MobileSubstrate/DynamicLibra
 python3 - "$ROOTPKG/DEBIAN/control" <<'PY'
 import pathlib,sys
 p=pathlib.Path(sys.argv[1]); s=p.read_text()
-s=s.replace('Version: 1.0.3\n','Version: 1.0.3+roothide\n')
+s=s.replace('Version: 1.0.4\n','Version: 1.0.4+roothide\n')
 s=s.replace('Architecture: iphoneos-arm64\n','Architecture: iphoneos-arm64e\n')
 p.write_text(s)
 PY
-dpkg-deb -Zgzip --root-owner-group -b "$ROOTPKG" "$DIST/GrabberCard_1.0.3+roothide_iphoneos-arm64e.deb"
+dpkg-deb -Zgzip --root-owner-group -b "$ROOTPKG" "$DIST/GrabberCard_1.0.4+roothide_iphoneos-arm64e.deb"
 
 $LIPO "$OUT/GrabberCard.dylib" -verify_arch arm64 arm64e
 $LIPO "$OUT/GrabberCardSettings" -verify_arch arm64 arm64e
 mkdir -p "$WORK/verify"
-dpkg-deb -x "$DIST/GrabberCard_1.0.3+roothide_iphoneos-arm64e.deb" "$WORK/verify"
+dpkg-deb -x "$DIST/GrabberCard_1.0.4+roothide_iphoneos-arm64e.deb" "$WORK/verify"
 V="$WORK/verify"
 $LIPO "$V/Library/MobileSubstrate/DynamicLibraries/GrabberCard.dylib" -verify_arch arm64 arm64e
 $LIPO "$V/Library/PreferenceBundles/GrabberCardSettings.bundle/GrabberCardSettings" -verify_arch arm64 arm64e
@@ -118,6 +118,6 @@ for p in sys.argv[1:]:
  if bad: raise SystemExit(f'Unexpected /var/jb dependency in {p}: {bad}')
  print('Dependencies OK:',p)
 PY
-dpkg-deb -f "$DIST/GrabberCard_1.0.3+roothide_iphoneos-arm64e.deb" Package Version Architecture
-shasum -a 256 "$DIST/GrabberCard_1.0.3+roothide_iphoneos-arm64e.deb"
+dpkg-deb -f "$DIST/GrabberCard_1.0.4+roothide_iphoneos-arm64e.deb" Package Version Architecture
+shasum -a 256 "$DIST/GrabberCard_1.0.4+roothide_iphoneos-arm64e.deb"
 echo 'RootHide build and static checks complete.'
