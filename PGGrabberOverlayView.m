@@ -64,11 +64,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @property (nonatomic, assign) NSUInteger lyricsRequestGeneration;
 @property (nonatomic, strong) UILabel *elapsedLabel;
 @property (nonatomic, strong) UILabel *durationLabel;
-@property (nonatomic, assign) CGFloat cardHeightScale;
-@property (nonatomic, assign) CGFloat fontWeight;
-@property (nonatomic, assign) BOOL longPressControls;
-@property (nonatomic, assign) BOOL lyricsLookupEnabled;
-@property (nonatomic, assign) BOOL expanded;
+@property (nonatomic, assign, readwrite, getter=isExpanded) BOOL expanded;
 @property (nonatomic, assign) BOOL hasPendingPlaybackState;
 @property (nonatomic, assign) BOOL pendingPlaybackState;
 @property (nonatomic, strong) NSDate *pendingPlaybackDeadline;
@@ -729,7 +725,7 @@ static NSString *PGTimedLyricAtTime(NSString *lrc, double seconds) {
         NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:line options:0 range:NSMakeRange(0, line.length)];
         if (!matches.count) continue;
         NSTextCheckingResult *last = matches.lastObject;
-        NSString *text = [line substringFromIndex:NSMaxRange(last)];
+        NSString *text = [line substringFromIndex:NSMaxRange([last range])];
         for (NSTextCheckingResult *match in matches) {
             double mm = [[line substringWithRange:[match rangeAtIndex:1]] doubleValue];
             double ss = [[line substringWithRange:[match rangeAtIndex:2]] doubleValue];
