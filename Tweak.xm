@@ -122,9 +122,8 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     if(chevron.window==self.sourceWindow&&self.sourceWindow){CGRect r=[chevron convertRect:chevron.bounds toView:self.sourceWindow];anchor=[self.sourceWindow convertRect:r toView:window];self.anchorRect=[NSValue valueWithCGRect:anchor];}
     else if(chevron.window==window){anchor=[chevron convertRect:chevron.bounds toView:window];self.anchorRect=[NSValue valueWithCGRect:anchor];}
     CGFloat center=CGRectIsEmpty(anchor)?CGRectGetMidX(bounds):CGRectGetMidX(anchor);
-    CGFloat top=CGRectIsEmpty(anchor)?CGRectGetMinY(bounds)+safe.top:CGRectGetMinY(anchor);
-    top=MIN(MAX(CGRectGetMinY(bounds),top),MAX(CGRectGetMinY(bounds),CGRectGetMaxY(bounds)-height));
-    CGFloat left=MAX(CGRectGetMinX(bounds)+inset,MIN(center-width*0.5,CGRectGetMaxX(bounds)-inset-width));
+        CGFloat left=MAX(CGRectGetMinX(bounds)+inset,MIN(center-width*0.5,CGRectGetMaxX(bounds)-inset-width));
+    CGFloat top=CGRectGetMinY(bounds)+safe.top+4.0;
     return CGRectMake(left,top,width,height);
 }
 - (void)deferAncestorTaps {
@@ -158,6 +157,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     if(!self.card||!self.window)return;PerfectGrabberPreferences *p=PerfectGrabberPreferences.sharedPreferences;
     if(!p.isEnabled){[self hide];return;}
     self.card.cardScale=p.cardScale;self.card.blurAmount=p.cardBlur;self.card.backgroundOpacity=p.cardOpacity;self.card.cornerRadius=p.cardCornerRadius;
+    [self.card refreshAppearance];
     CGRect frame=[self frameForWindow:self.window height:[self.card heightForWidth:self.preferredWidth]];
     if(self.card.superview==self.host&&self.host.superview==self.parent){self.host.frame=[self.window convertRect:frame toView:self.parent];self.card.frame=self.host.bounds;}
     else if(self.card.superview==self.container){self.container.frame=self.window.bounds;self.card.frame=frame;}
@@ -170,15 +170,11 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:^{self.host.frame=frame;self.card.frame=self.host.bounds;[self.card layoutIfNeeded];} completion:nil];
 }
 - (void)longPressChanged:(BOOL)active {
-    self.holdActive=active;self.releaseGrace=active?0.0:CACurrentMediaTime()+1.2;self.card.deferNativeGrabberDismissal=active;
-    if(self.grabber)objc_setAssociatedObject(self.grabber,PGPinnedCardGuardKey,active?@(-1.0):@(self.releaseGrace),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    self.holdActive=active;self.releaseGrace=0.0;self.card.deferNativeGrabberDismissal=YES;
+    if(self.grabber)objc_setAssociatedObject(self.grabber,PGPinnedCardGuardKey,active?@(-1.0):nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 - (void)dockSameCardAfterDismiss {
     if(!self.card||!self.sourceWindow||self.docked)return;
-    if(self.holdActive||CACurrentMediaTime()<self.releaseGrace){
-        if(self.host){self.host.hidden=NO;[self.host.superview bringSubviewToFront:self.host];}if(self.chevron)self.chevron.hidden=YES;
-        __weak typeof(self) weak=self;dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.15*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[weak dockSameCardAfterDismiss];});return;
-    }
     UIWindow *targetWindow=[self persistentWindowForHost:self.host]?:self.sourceWindow;
     CGRect target=[self frameForWindow:targetWindow height:[self.card heightForWidth:self.preferredWidth]];
     [self.card removeFromSuperview];
@@ -205,14 +201,7 @@ static void PGPreferencesChanged(CFNotificationCenterRef center,void *observer,C
 %hook SBGrabberTongue
 - (void)_willPresent{%orig;[PerfectGrabberPreferences.sharedPreferences reload];if(!PerfectGrabberPreferences.sharedPreferences.isEnabled){[[PGNativeCardHost shared]hide];return;}if(!PGIsTopEdgeGrabber(self))return;UIView*host=PGTongueView(self);if(host.window)[[PGNativeCardHost shared]show:host chevron:PGTongueChevron(self) grabber:self];}
 - (void)_willDismiss{
-    PGNativeCardHost *state=[PGNativeCardHost shared];NSNumber *guard=objc_getAssociatedObject(self,PGPinnedCardGuardKey);
-    BOOL guarded=(guard&&guard.doubleValue<0)||(guard&&CACurrentMediaTime()<guard.doubleValue);
-    if(guarded||state.holdActive||(state.card&&state.card.isExpanded)){
-        UIView*host=PGTongueView(self);if(host){host.hidden=NO;[host.superview bringSubviewToFront:host];}
-        UIView*chevron=PGTongueChevron(self);if(chevron)chevron.hidden=YES;
-        [state refresh];
-        return;
-    }
+    PGNativeCardHost *state=[PGNativeCardHost shared];
     %orig;
     __weak PGNativeCardHost *weakState=state;dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.28*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[weakState dockSameCardAfterDismiss];});
 }

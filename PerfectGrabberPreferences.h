@@ -19,6 +19,7 @@ FOUNDATION_EXPORT NSString *const PGPreferencesChangedNotification;
 @property (nonatomic, readonly) CGFloat cardBlur;
 @property (nonatomic, readonly) CGFloat cardOpacity;
 @property (nonatomic, readonly) CGFloat cardCornerRadius;
+@property (nonatomic, readonly) NSInteger backgroundMode;
 
 + (instancetype)sharedPreferences;
 + (UIColor *)colorFromHexString:(NSString *)value fallback:(UIColor *)fallback;

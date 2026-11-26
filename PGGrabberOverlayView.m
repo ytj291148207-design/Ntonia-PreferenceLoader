@@ -19,6 +19,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @interface PGGrabberOverlayView () <UIGestureRecognizerDelegate>
 @property (nonatomic, strong) UIVisualEffectView *blurView;
 @property (nonatomic, strong) UIView *tintView;
+@property (nonatomic, strong) UIView *gaussianBlurBackdrop;
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) UILabel *batteryLabel;
 @property (nonatomic, strong) UILabel *temperatureLabel;
@@ -42,6 +43,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @property (nonatomic, strong) UISlider *progressSlider;
 @property (nonatomic, assign) BOOL isSeeking;
 @property (nonatomic, assign) double displayedSeekElapsed;
+@property (nonatomic, assign) NSInteger lastHapticStep;
+@property (nonatomic, assign) BOOL vibrationFeedbackEnabled;
 @property (nonatomic, copy) NSString *compactStatusText;
 @property (nonatomic, copy) NSString *compactTrackText;
 - (UILabel *)newLabelWithWeight:(UIFontWeight)weight alignment:(NSTextAlignment)alignment;
@@ -72,6 +75,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.backgroundColor = UIColor.clearColor;
     self.clipsToBounds = YES;
     self.layer.masksToBounds = YES;
+    self.vibrationFeedbackEnabled = preferences.vibrationFeedback;
     self.userInteractionEnabled = YES;
     self.layer.cornerCurve = kCACornerCurveContinuous;
     self.layer.borderWidth = 1.0 / MAX(UIScreen.mainScreen.scale, 1.0);
@@ -86,11 +90,16 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     _blurView = [[UIVisualEffectView alloc] initWithEffect:effect];
     _blurView.userInteractionEnabled = NO;
     [self addSubview:_blurView];
+    _gaussianBlurBackdrop = [UIView new];
+    _gaussianBlurBackdrop.userInteractionEnabled = NO;
+    _gaussianBlurBackdrop.backgroundColor = [UIColor colorWithWhite:0.72 alpha:0.52];
+    _gaussianBlurBackdrop.hidden = YES;
 
     _tintView = [UIView new];
     _tintView.userInteractionEnabled = NO;
     _tintView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:_backgroundOpacity];
     [self addSubview:_tintView];
+    [self insertSubview:_gaussianBlurBackdrop belowSubview:_tintView];
 
     _timeLabel = [self newLabelWithWeight:UIFontWeightSemibold alignment:NSTextAlignmentLeft];
     _timeLabel.adjustsFontSizeToFitWidth = YES;
@@ -224,6 +233,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 - (CGFloat)cornerRadius { return _cornerRadius; }
 - (void)setCornerRadius:(CGFloat)value {
     _cornerRadius = PGClamp(value, 0.0, 80.0);
+    [self refreshAppearance];
     [self setNeedsLayout];
 }
 
@@ -288,17 +298,27 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     } @catch (__unused NSException *exception) { }
 
     CGFloat blur = PGClamp(self.blurAmount, 0.0, 1.0);
-    UIBlurEffectStyle style = blur < 0.20 ? UIBlurEffectStyleSystemThinMaterialDark
-                              : (blur < 0.62 ? UIBlurEffectStyleSystemMaterialDark
-                                             : UIBlurEffectStyleSystemChromeMaterialDark);
+    NSInteger mode = PerfectGrabberPreferences.sharedPreferences.backgroundMode;
+    UIBlurEffectStyle style = mode == 0 ? UIBlurEffectStyleSystemThinMaterialDark
+                              : (mode == 1 ? UIBlurEffectStyleSystemMaterialDark : UIBlurEffectStyleSystemChromeMaterialDark);
     if (@available(iOS 13.0, *)) self.blurView.effect = [UIBlurEffect effectWithStyle:style];
-    self.blurView.alpha = 0.35 + blur * 0.65;
+    self.blurView.alpha = (0.35 + blur * 0.65) * (mode == 2 ? 0.35 : 1.0);
+    self.gaussianBlurBackdrop.hidden = mode != 2;
+    self.gaussianBlurBackdrop.backgroundColor = [UIColor colorWithWhite:0.70 alpha:0.18 + blur * 0.48];
     // Keep one predictable dark tint; only the opacity slider controls its strength.
     self.tintView.backgroundColor = [UIColor colorWithWhite:0.0
                                                       alpha:PGClamp(self.backgroundOpacity, 0.0, 1.0)];
     self.blurView.hidden = NO;
     self.layer.cornerRadius = MAX(0.0, self.cornerRadius * self.cardScale);
-    self.layer.borderColor = [textColor colorWithAlphaComponent:0.20].CGColor;
+    self.blurView.layer.cornerRadius = self.layer.cornerRadius;
+    self.blurView.clipsToBounds = YES;
+    self.blurView.layer.masksToBounds = YES;
+    self.gaussianBlurBackdrop.layer.cornerRadius = self.layer.cornerRadius;
+    self.gaussianBlurBackdrop.clipsToBounds = YES;
+    self.gaussianBlurBackdrop.layer.masksToBounds = YES;
+    self.tintView.layer.cornerRadius = self.layer.cornerRadius;
+    self.tintView.clipsToBounds = YES;
+    self.tintView.layer.masksToBounds = YES;
     self.timeLabel.textColor = textColor;
     self.batteryLabel.textColor = textColor;
     self.temperatureLabel.textColor = textColor;
@@ -331,18 +351,19 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     CGFloat height = CGRectGetHeight(self.bounds);
     CGFloat scale = PGClamp(self.cardScale, 0.65, 1.50);
     self.layer.cornerRadius = MAX(0.0, self.cornerRadius * scale);
-    self.blurView.frame = self.bounds;
-    self.tintView.frame = self.bounds;
+    self.blurView.frame = self.bounds; self.blurView.layer.cornerRadius=self.layer.cornerRadius;
+    self.gaussianBlurBackdrop.frame = self.bounds; self.gaussianBlurBackdrop.layer.cornerRadius=self.layer.cornerRadius;
+    self.tintView.frame = self.bounds; self.tintView.layer.cornerRadius=self.layer.cornerRadius;
 
     if (self.compactMode) {
         CGFloat pad=8.0*scale, close=20.0*scale, row=17.0*scale;
         CGFloat statusWidth=MAX(0.0,width-pad*2.0-close-3.0*scale);
         if (!self.isExpanded) {
-            CGFloat tw=statusWidth*0.20,bw=statusWidth*0.23,hw=statusWidth*0.22;
-            self.timeLabel.frame=CGRectMake(pad,0,tw,row);
-            self.batteryLabel.frame=CGRectMake(pad+tw,0,bw,row);
-            self.temperatureLabel.frame=CGRectMake(pad+tw+bw,0,hw,row);
-            self.cpuLabel.frame=CGRectMake(pad+tw+bw+hw,0,statusWidth-tw-bw-hw,row);
+            CGFloat rowWidth=statusWidth, rowX=(width-rowWidth)*0.5, tw=rowWidth*0.20,bw=rowWidth*0.23,hw=rowWidth*0.22;
+            self.timeLabel.frame=CGRectMake(rowX,0,tw,row);
+            self.batteryLabel.frame=CGRectMake(rowX+tw,0,bw,row);
+            self.temperatureLabel.frame=CGRectMake(rowX+tw+bw,0,hw,row);
+            self.cpuLabel.frame=CGRectMake(rowX+tw+bw+hw,0,rowWidth-tw-bw-hw,row);
             self.closeButton.frame=CGRectMake(width-pad-close,0,close,close); self.closeButton.hidden=NO;
             for (UILabel *label in @[_timeLabel,_batteryLabel,_temperatureLabel,_cpuLabel]) { label.font=[self configuredFontWithSize:9.0 weight:UIFontWeightSemibold]; label.adjustsFontSizeToFitWidth=YES; label.minimumScaleFactor=0.35; label.textAlignment=NSTextAlignmentCenter; }
             CGFloat y=19.0*scale, art=18.0*scale;
@@ -356,9 +377,11 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
             self.previousButton.hidden=YES; self.playPauseButton.hidden=YES; self.nextButton.hidden=YES;
             return;
         }
-        CGFloat tw=statusWidth*0.18,bw=statusWidth*0.21,hw=statusWidth*0.20;
-        self.timeLabel.frame=CGRectMake(pad,2.0*scale,tw,row); self.batteryLabel.frame=CGRectMake(pad+tw,2.0*scale,bw,row);
-        self.temperatureLabel.frame=CGRectMake(pad+tw+bw,2.0*scale,hw,row); self.cpuLabel.frame=CGRectMake(pad+tw+bw+hw,2.0*scale,statusWidth-tw-bw-hw,row);
+        CGFloat rowWidth=statusWidth, rowX=(width-rowWidth)*0.5, tw=rowWidth*0.20,bw=rowWidth*0.23,hw=rowWidth*0.22;
+        self.timeLabel.frame=CGRectMake(rowX,2.0*scale,tw,row);
+        self.batteryLabel.frame=CGRectMake(rowX+tw,2.0*scale,bw,row);
+        self.temperatureLabel.frame=CGRectMake(rowX+tw+bw,2.0*scale,hw,row);
+        self.cpuLabel.frame=CGRectMake(rowX+tw+bw+hw,2.0*scale,rowWidth-tw-bw-hw,row);
         self.closeButton.frame=CGRectMake(width-pad-close,2.0*scale,close,close); self.closeButton.hidden=NO;
         for(UILabel*label in @[_timeLabel,_batteryLabel,_temperatureLabel,_cpuLabel]){label.font=[self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];label.adjustsFontSizeToFitWidth=YES;label.minimumScaleFactor=0.35;label.textAlignment=NSTextAlignmentCenter;}
         CGFloat y=24.0*scale,art=34.0*scale;self.artworkView.frame=CGRectMake(pad,y,art,art);self.artworkView.layer.cornerRadius=6.0*scale;self.artworkFallbackLabel.frame=self.artworkView.frame;
@@ -472,6 +495,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.timeLabel.text = [formatter stringFromDate:NSDate.date] ?: @"--:--";
 
     PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
+    self.vibrationFeedbackEnabled = preferences.vibrationFeedback;
     NSString *batteryIcon = (preferences.chargingIcon && [self isCharging]) ? @"⚡" : @"▰";
     self.batteryLabel.text = [NSString stringWithFormat:@"%@ %ld%%", batteryIcon, (long)[self currentBatteryPercentage]];
 
@@ -523,11 +547,15 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     PGNowPlaying *nowPlaying = PGNowPlaying.sharedInstance;
     if (nowPlaying.duration <= 0.0) { self.isSeeking = NO; return; }
     self.isSeeking = YES;
+    self.lastHapticStep = (NSInteger)lrint(slider.value * 20.0);
     self.displayedSeekElapsed = slider.value * nowPlaying.duration;
 }
 - (void)progressChanged:(UISlider *)slider {
     double duration = PGNowPlaying.sharedInstance.duration;
     if (!self.isSeeking || duration <= 0.0) return;
+    NSInteger step = (NSInteger)lrint(slider.value * 20.0);
+    if (self.vibrationFeedbackEnabled && step != self.lastHapticStep) AudioServicesPlaySystemSound(1519);
+    self.lastHapticStep = step;
     self.displayedSeekElapsed = slider.value * duration;
 }
 - (void)progressEnded:(UISlider *)slider {
@@ -542,7 +570,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 - (void)handleCardLongPress:(UILongPressGestureRecognizer *)recognizer {
     if (recognizer.state == UIGestureRecognizerStateBegan) {
         if (self.onLongPressStateChange) self.onLongPressStateChange(YES);
-        [self setExpanded:!self.isExpanded animated:YES];
+        if (!self.isExpanded) [self setExpanded:YES animated:YES];
     } else if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled || recognizer.state == UIGestureRecognizerStateFailed) {
         if (self.onLongPressStateChange) self.onLongPressStateChange(NO);
     }

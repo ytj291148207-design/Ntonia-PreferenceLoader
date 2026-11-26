@@ -56,7 +56,7 @@ static void PGWriteValue(NSString *key, id value) {
     if (_specifiers) return _specifiers;
     NSMutableArray *items = [NSMutableArray array];
     PSSpecifier *main = [PSSpecifier groupSpecifierWithName:@"顶部播放器卡片"];
-    [main setProperty:@"从顶部下拉触发。卡片固定吸附在屏幕顶部中央标记位置，不可拖动；下拉面板收起后仍贴边显示。长按展开上一首、播放/暂停、下一首控制，再长按收回。系统未提供歌词时显示“暂无歌词”。"
+    [main setProperty:@"从顶部下拉触发。卡片固定在顶部；时间、电量、温度和 CPU 居中显示。长按展开同一卡片内的播放控制和进度条；卡片保持显示，点击右上角 × 关闭。"
                 forKey:PSFooterTextGroupKey];
     [items addObject:main];
     [items addObject:[self preferenceNamed:@"启用卡片" key:@"EnabledPerfectGrabber" defaultValue:@NO cell:PSSwitchCell]];
@@ -81,6 +81,9 @@ static void PGWriteValue(NSString *key, id value) {
         [slider setProperty:option[@"max"] forKey:PSControlMaximumKey];
         [items addObject:slider];
     }
+    NSArray *backgroundNames = @[@"磨砂", @"毛玻璃", @"高斯模糊"];
+    NSInteger backgroundIndex = MAX(0, MIN(2, [PGReadValue(@"BackgroundMode", @1) integerValue]));
+    [items addObject:[self buttonNamed:[NSString stringWithFormat:@"背景模式：%@（点击切换）", backgroundNames[backgroundIndex]] action:@selector(cycleBackgroundMode)]];
     [items addObject:[self buttonNamed:@"文字颜色" action:@selector(chooseTextColor)]];
     [items addObject:[PSSpecifier groupSpecifierWithName:@"操作"]];
     [items addObject:[self buttonNamed:@"恢复默认设置" action:@selector(onResetSettings)]];
@@ -99,12 +102,29 @@ static void PGWriteValue(NSString *key, id value) {
 
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
     PGWriteValue([specifier propertyForKey:PSKeyNameKey], value);
-    if ([specifier cellType] == PSSliderCell) {
-        CFTimeInterval now = CACurrentMediaTime();
-        if (now - self.lastSliderHaptic >= 0.075) {
-            self.lastSliderHaptic = now;
-            AudioServicesPlaySystemSound(1519);
+}
+
+// Preferences only calls setPreferenceValue when a slider is committed. Observe
+// UIControlEventValueChanged directly so feedback tracks every movement tick.
+- (void)settingsSliderChanged:(UISlider *)slider {
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - self.lastSliderHaptic < 0.075) return;
+    self.lastSliderHaptic = now;
+    AudioServicesPlaySystemSound(1519);
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    NSMutableArray<UIView *> *pending = [NSMutableArray arrayWithObject:cell];
+    while (pending.count) {
+        UIView *view = pending.lastObject;
+        [pending removeLastObject];
+        if ([view isKindOfClass:UISlider.class]) {
+            UISlider *slider = (UISlider *)view;
+            [slider removeTarget:self action:@selector(settingsSliderChanged:) forControlEvents:UIControlEventValueChanged];
+            [slider addTarget:self action:@selector(settingsSliderChanged:) forControlEvents:UIControlEventValueChanged];
+            continue;
         }
+        [pending addObjectsFromArray:view.subviews];
     }
 }
 
@@ -139,6 +159,14 @@ static void PGWriteValue(NSString *key, id value) {
     [self presentViewController:picker animated:YES completion:nil];
 }
 
+- (void)cycleBackgroundMode {
+    NSInteger current = [PGReadValue(@"BackgroundMode", @1) integerValue];
+    NSInteger next = (current + 1) % 3;
+    PGWriteValue(@"BackgroundMode", @(next));
+    _specifiers = nil;
+    [self reloadSpecifiers];
+}
+
 - (void)chooseTextColor {
     [self showColorPickerForKey:@"TextColor" fallback:UIColor.whiteColor];
 }
@@ -171,7 +199,7 @@ static void PGWriteValue(NSString *key, id value) {
 - (void)onResetSettings {
     NSArray *keys = @[@"EnabledPerfectGrabber", @"VibrationFeedback", @"Disable24H", @"ChargingIcon",
                       @"FontSize", @"TextColor", @"CardWidth", @"CardScale",
-                      @"CardBlur", @"CardOpacity", @"CardCornerRadius"];
+                      @"CardBlur", @"CardOpacity", @"CardCornerRadius", @"BackgroundMode"];
     for (NSString *key in keys) {
         CFPreferencesSetAppValue((__bridge CFStringRef)key, NULL, (__bridge CFStringRef)PGDomain);
     }
