@@ -296,9 +296,9 @@ static NSString *PGBundleIdentifierForPID(int pid) {
     NSString *query = [NSString stringWithFormat:@"%@|%@|%@", self.title ?: @"", self.artist ?: @"", self.album ?: @""];
     NSString *cacheKey = [NSString stringWithFormat:@"%@|%.0f", query, self.duration];
     if ([query isEqualToString:self.lastLyricsQuery]) return;
-    if (self.isFetchingLyrics) return;
     NSString *cached = [self.lyricsCache objectForKey:cacheKey];
     if (cached) { self.lastLyricsQuery=query; if (cached.length && !self.lyrics.length) self.lyrics = cached; return; }
+    if (self.isFetchingLyrics) return;
     if (self.lastLyricsQueryDate && -[self.lastLyricsQueryDate timeIntervalSinceNow] < 2.0) return;
     self.lastLyricsQuery = query;
     self.lastLyricsQueryDate = NSDate.date;

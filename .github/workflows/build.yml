@@ -1,7 +1,7 @@
 name: Build DEB
 on:
   push:
-    branches: [main]
+    branches: [main, perfectgrabber-gaming-v2]
     paths-ignore:
       - 'dist/**'
   workflow_dispatch:
