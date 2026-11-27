@@ -513,12 +513,16 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         CGFloat statusInset = basePad + PGFrameInset(statusY, statusY + row, height, radius);
         CGFloat statusRight = MAX(0.0, width - statusInset - close - 3.0 * scale);
         CGFloat rowWidth = MAX(0.0, statusRight - statusInset);
-        CGFloat tw = rowWidth * 0.20, bw = rowWidth * 0.23, hw = rowWidth * 0.22;
-
-        self.timeLabel.frame = CGRectMake(statusInset, statusY, tw, row);
-        self.batteryLabel.frame = CGRectMake(statusInset + tw, statusY, bw, row);
-        self.temperatureLabel.frame = CGRectMake(statusInset + tw + bw, statusY, hw, row);
-        self.cpuLabel.frame = CGRectMake(statusInset + tw + bw + hw, statusY, rowWidth - tw - bw - hw, row);
+        // Keep metrics in one compact row. The previous center gap left a blank
+        // block beneath Dynamic Island, so reclaim it for the temperature field.
+        CGFloat timeWidth = rowWidth * 0.20;
+        CGFloat batteryWidth = rowWidth * 0.25;
+        CGFloat temperatureWidth = rowWidth * 0.26;
+        CGFloat cpuWidth = MAX(0.0, rowWidth - timeWidth - batteryWidth - temperatureWidth);
+        self.timeLabel.frame = CGRectMake(statusInset, statusY, timeWidth, row);
+        self.batteryLabel.frame = CGRectMake(statusInset + timeWidth, statusY, batteryWidth, row);
+        self.temperatureLabel.frame = CGRectMake(statusInset + timeWidth + batteryWidth, statusY, temperatureWidth, row);
+        self.cpuLabel.frame = CGRectMake(statusInset + timeWidth + batteryWidth + temperatureWidth, statusY, cpuWidth, row);
         for (UILabel *label in @[_timeLabel, _batteryLabel, _temperatureLabel, _cpuLabel]) {
             label.font = [self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];
             label.adjustsFontSizeToFitWidth = YES;
@@ -841,7 +845,7 @@ static NSString *PGTimedLyricAtTime(NSString *lrc, double seconds) {
     self.batteryLabel.text = [NSString stringWithFormat:@"%@ %ld%%", batteryIcon, (long)[self currentBatteryPercentage]];
 
     double temperature = PGBatteryTemperatureCelsius();
-    self.temperatureLabel.text = isfinite(temperature) ? [NSString stringWithFormat:@"♨ %.0f°", temperature] : @"♨ —";
+    self.temperatureLabel.text = isfinite(temperature) ? [NSString stringWithFormat:@"T %.0f°", temperature] : @"T —";
     double cpu = PGCPUUsagePercent();
     self.cpuLabel.text = isfinite(cpu) ? [NSString stringWithFormat:@"CPU %.0f%%", cpu] : @"CPU —";
 
@@ -940,9 +944,11 @@ static NSString *PGTimedLyricAtTime(NSString *lrc, double seconds) {
             [generator prepare];
             [generator impactOccurred];
         }
-        if (self.onLongPressStateChange) self.onLongPressStateChange(YES);
         if (!self.isExpanded) [self setExpanded:YES animated:YES];
+        if (self.onLongPressStateChange) self.onLongPressStateChange(YES);
     } else if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled || recognizer.state == UIGestureRecognizerStateFailed) {
+        // Keep the expanded card visible after the user's long press ends.
+        // The arrow button is the explicit collapse control.
         if (self.onLongPressStateChange) self.onLongPressStateChange(NO);
     }
 }

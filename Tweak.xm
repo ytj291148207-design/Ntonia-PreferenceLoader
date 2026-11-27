@@ -36,10 +36,26 @@ static UIView *PGTongueView(id grabber) {
     }
     return [grabber isKindOfClass:UIView.class] ? grabber : nil;
 }
+static UIView *PGNamedTongueView(id grabber, NSString *name) {
+    Ivar ivar = class_getInstanceVariable(object_getClass(grabber), name.UTF8String);
+    id value = ivar ? object_getIvar(grabber, ivar) : nil;
+    if (![value isKindOfClass:UIView.class]) { @try { value = [grabber valueForKey:name]; } @catch (__unused NSException *e) { value = nil; } }
+    return [value isKindOfClass:UIView.class] ? value : nil;
+}
 static UIView *PGTongueChevron(id grabber) {
     Ivar ivar = class_getInstanceVariable(object_getClass(grabber), "_tongueChevron");
     id value = ivar ? object_getIvar(grabber, ivar) : nil;
+    if (![value isKindOfClass:UIView.class]) { @try { value = [grabber valueForKey:@"_tongueChevron"]; } @catch (__unused NSException *e) { value = nil; } }
     return [value isKindOfClass:UIView.class] ? value : nil;
+}
+static UIView *PGTongueBackdropView(id grabber) {
+    for (NSString *name in @[@"_tongueBackdropView", @"_tongueChevronBackgroundView", @"_grabberBackdropView"]) {
+        Ivar ivar = class_getInstanceVariable(object_getClass(grabber), name.UTF8String);
+        id value = ivar ? object_getIvar(grabber, ivar) : nil;
+        if (![value isKindOfClass:UIView.class]) { @try { value = [grabber valueForKey:name]; } @catch (__unused NSException *e) { value = nil; } }
+        if ([value isKindOfClass:UIView.class]) return value;
+    }
+    return nil;
 }
 static BOOL PGIsTopEdgeGrabber(id grabber) {
     for (NSString *key in @[@"edge", @"grabberEdge", @"screenEdge", @"edgeLocation", @"displayEdge"]) {
@@ -66,20 +82,39 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 }
 @end
 
-#pragma mark - 原生面板内卡片宿主
+/// Higher-level SpringBoard window for the persistent game card. Only the card
+/// accepts touches; the rest of the game remains fully interactive.
+@interface PGOverlayWindow : UIWindow
+@property (nonatomic, weak) UIView *cardContainer;
+@end
+@implementation PGOverlayWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = [super hitTest:point withEvent:event];
+    UIView *container = self.cardContainer;
+    for (UIView *view = hit; view; view = view.superview) if (view == container) return hit;
+    return nil;
+}
+@end
+
+#pragma mark - 卡片宿主与常显覆盖窗口
 
 @interface PGNativeCardHost : NSObject
 @property (nonatomic, strong) PGEdgeCardContainer *container;
 @property (nonatomic, strong) PGGrabberOverlayView *card;
+@property (nonatomic, strong) PGOverlayWindow *overlayWindow;
 @property (nonatomic, weak) UIWindow *window;
 @property (nonatomic, weak) UIWindow *panelWindow;
 @property (nonatomic, weak) UIView *panelParent;
 @property (nonatomic, weak) UIView *originalHost;
-@property (nonatomic, weak) id grabber;
-@property (nonatomic, weak) UIView *chevron;
-@property (nonatomic, assign) BOOL chevronWasHidden;
-@property (nonatomic, assign) BOOL hasChevronState;
+@property (nonatomic, weak) UIView *nativeBackdrop;
+@property (nonatomic, assign) BOOL nativeBackdropWasHidden;
+@property (nonatomic, assign) BOOL hasNativeBackdropState;
 @property (nonatomic, assign) CGFloat anchorRatio;
+@property (nonatomic, assign) CGFloat anchorY;
+@property (nonatomic, assign) CGFloat anchorScreenX;
+@property (nonatomic, assign) CGFloat anchorScreenY;
+@property (nonatomic, assign) BOOL isOverlayActive;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *nativeVisualStates;
 @property (nonatomic, assign) BOOL presented;
 + (instancetype)shared;
 - (void)presentFromHost:(UIView *)host chevron:(UIView *)chevron grabber:(id)grabber;
@@ -88,6 +123,8 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (void)longPressChanged:(BOOL)active;
 - (void)refresh;
 - (void)hide;
+- (void)suppressNativeVisualsInView:(UIView *)view root:(BOOL)isRoot;
+- (void)restoreNativeVisuals;
 @end
 
 @implementation PGNativeCardHost
@@ -106,23 +143,195 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     return self.card.isExpanded ? width : MIN(440.0, width);
 }
 
+- (UIWindow *)overlayWindowForScene:(UIWindowScene *)scene {
+    if (!scene) return nil;
+    if (self.overlayWindow && self.overlayWindow.windowScene == scene) return self.overlayWindow;
+    PGOverlayWindow *overlay = [[PGOverlayWindow alloc] initWithWindowScene:scene];
+    overlay.windowLevel = UIWindowLevelAlert + 1.0;
+    overlay.backgroundColor = UIColor.clearColor;
+    overlay.opaque = NO;
+    UIViewController *root = [UIViewController new];
+    root.view.backgroundColor = UIColor.clearColor;
+    overlay.rootViewController = root;
+    overlay.hidden = NO;
+    self.overlayWindow = overlay;
+    return overlay;
+}
+
 - (UIView *)panelCanvasForHost:(UIView *)host {
-    // Attach within the active panel's content hierarchy, not to UIWindow itself
-    // and never to a separate alert-level overlay window.
-    UIWindow *panelWindow = host.window;
-    UIView *panelContent = panelWindow.rootViewController.view;
-    if (panelContent && panelContent.window == panelWindow) return panelContent;
-    return host.superview ?: host;
+    UIWindowScene *scene = host.window.windowScene;
+    UIWindow *overlay = [self overlayWindowForScene:scene];
+    return overlay.rootViewController.view ?: host.window.rootViewController.view ?: host.superview ?: host;
+}
+
+- (id)nullBox:(id)value { return value ?: (id)NSNull.null; }
+
+- (NSDictionary *)snapshotLayer:(CALayer *)layer {
+    NSMutableDictionary *state = [@{@"layer":layer,
+        @"background": [self nullBox:(__bridge id)layer.backgroundColor],
+        @"contents": [self nullBox:layer.contents],
+        @"border": [self nullBox:(__bridge id)layer.borderColor],
+        @"borderWidth": @(layer.borderWidth),
+        @"shadow": @(layer.shadowOpacity)} mutableCopy];
+    if ([layer isKindOfClass:CAShapeLayer.class]) {
+        CAShapeLayer *shape = (CAShapeLayer *)layer;
+        state[@"fill"] = [self nullBox:(__bridge id)shape.fillColor];
+        state[@"stroke"] = [self nullBox:(__bridge id)shape.strokeColor];
+    }
+    if ([layer isKindOfClass:CAGradientLayer.class]) {
+        CAGradientLayer *gradient = (CAGradientLayer *)layer;
+        state[@"gradientColors"] = gradient.colors ?: @[];
+        state[@"gradientLocations"] = gradient.locations ?: @[];
+        state[@"gradientStart"] = [NSValue valueWithCGPoint:gradient.startPoint];
+        state[@"gradientEnd"] = [NSValue valueWithCGPoint:gradient.endPoint];
+    }
+    NSMutableArray *children = [NSMutableArray array];
+    for (CALayer *child in layer.sublayers) [children addObject:[self snapshotLayer:child]];
+    state[@"children"] = children;
+    return state;
+}
+
+- (void)clearLayer:(CALayer *)layer {
+    layer.backgroundColor = UIColor.clearColor.CGColor;
+    layer.contents = nil;
+    layer.borderColor = UIColor.clearColor.CGColor;
+    layer.borderWidth = 0.0;
+    layer.shadowOpacity = 0.0;
+    if ([layer isKindOfClass:CAShapeLayer.class]) {
+        CAShapeLayer *shape = (CAShapeLayer *)layer;
+        shape.fillColor = UIColor.clearColor.CGColor;
+        shape.strokeColor = UIColor.clearColor.CGColor;
+    }
+    if ([layer isKindOfClass:CAGradientLayer.class]) ((CAGradientLayer *)layer).colors = @[(id)UIColor.clearColor.CGColor, (id)UIColor.clearColor.CGColor];
+    for (CALayer *child in layer.sublayers.copy) [self clearLayer:child];
+}
+
+- (void)restoreLayerState:(NSDictionary *)state {
+    CALayer *layer = state[@"layer"];
+    if (![layer isKindOfClass:CALayer.class]) return;
+    id bg = state[@"background"];
+    id contents = state[@"contents"];
+    id border = state[@"border"];
+    layer.backgroundColor = bg == NSNull.null ? nil : (__bridge CGColorRef)bg;
+    layer.contents = contents == NSNull.null ? nil : contents;
+    layer.borderColor = border == NSNull.null ? nil : (__bridge CGColorRef)border;
+    layer.borderWidth = [state[@"borderWidth"] doubleValue];
+    layer.shadowOpacity = [state[@"shadow"] floatValue];
+    if ([layer isKindOfClass:CAShapeLayer.class]) {
+        id fill = state[@"fill"];
+        id stroke = state[@"stroke"];
+        ((CAShapeLayer *)layer).fillColor = fill == NSNull.null ? nil : (__bridge CGColorRef)fill;
+        ((CAShapeLayer *)layer).strokeColor = stroke == NSNull.null ? nil : (__bridge CGColorRef)stroke;
+    }
+    if ([layer isKindOfClass:CAGradientLayer.class] && state[@"gradientColors"]) {
+        CAGradientLayer *gradient = (CAGradientLayer *)layer;
+        gradient.colors = state[@"gradientColors"];
+        gradient.locations = state[@"gradientLocations"];
+        gradient.startPoint = [state[@"gradientStart"] CGPointValue];
+        gradient.endPoint = [state[@"gradientEnd"] CGPointValue];
+    }
+    for (NSDictionary *child in state[@"children"]) [self restoreLayerState:child];
+}
+
+- (void)suppressNativeVisualsInView:(UIView *)view root:(BOOL)isRoot {
+    if (!view) return;
+    if (!self.nativeVisualStates) self.nativeVisualStates = [NSMutableArray array];
+    if (view == self.container || view == self.card) return;
+    BOOL alreadyCaptured = NO;
+    for (NSDictionary *existing in self.nativeVisualStates) if (existing[@"view"] == view) { alreadyCaptured = YES; break; }
+    if (alreadyCaptured) {
+        // SpringBoard may rebuild/repaint the native capsule during dismissal; re-clear
+        // the cached view without replacing its original restoration snapshot.
+        view.backgroundColor = UIColor.clearColor;
+        if ([view isKindOfClass:UIVisualEffectView.class]) ((UIVisualEffectView *)view).effect = nil;
+        [self clearLayer:view.layer];
+        if ([view isKindOfClass:UILabel.class]) ((UILabel *)view).textColor = UIColor.clearColor;
+        if ([view isKindOfClass:UIImageView.class]) { ((UIImageView *)view).image = nil; ((UIImageView *)view).highlightedImage = nil; }
+        if ([view isKindOfClass:UIButton.class]) { [(UIButton *)view setImage:nil forState:UIControlStateNormal]; [(UIButton *)view setTitle:@"" forState:UIControlStateNormal]; }
+        if ([view isKindOfClass:UIVisualEffectView.class]) ((UIVisualEffectView *)view).effect = nil;
+        for (UIView *child in view.subviews.copy) [self suppressNativeVisualsInView:child root:NO];
+        return;
+    }
+    {
+        NSMutableDictionary *state = [@{@"view":view,
+            @"background": [self nullBox:view.backgroundColor],
+            @"layer": [self snapshotLayer:view.layer]} mutableCopy];
+        if ([view isKindOfClass:UILabel.class]) state[@"textColor"] = [self nullBox:((UILabel *)view).textColor];
+        if ([view isKindOfClass:UIImageView.class]) {
+            state[@"image"] = [self nullBox:((UIImageView *)view).image];
+            state[@"highlightedImage"] = [self nullBox:((UIImageView *)view).highlightedImage];
+        }
+        if ([view isKindOfClass:UIButton.class]) {
+            UIButton *button = (UIButton *)view;
+            state[@"buttonImage"] = [self nullBox:[button imageForState:UIControlStateNormal]];
+            state[@"buttonTitleColor"] = [self nullBox:[button titleColorForState:UIControlStateNormal]];
+            state[@"buttonTitle"] = [self nullBox:[button titleForState:UIControlStateNormal]];
+        }
+        if ([view isKindOfClass:UIVisualEffectView.class]) state[@"effect"] = [self nullBox:((UIVisualEffectView *)view).effect];
+        [self.nativeVisualStates addObject:state];
+        view.backgroundColor = UIColor.clearColor;
+        if ([view isKindOfClass:UIVisualEffectView.class]) ((UIVisualEffectView *)view).effect = nil;
+        [self clearLayer:view.layer];
+        if ([view isKindOfClass:UILabel.class]) ((UILabel *)view).textColor = UIColor.clearColor;
+        if ([view isKindOfClass:UIImageView.class]) {
+            ((UIImageView *)view).image = nil;
+            ((UIImageView *)view).highlightedImage = nil;
+        }
+        if ([view isKindOfClass:UIButton.class]) {
+            UIButton *button = (UIButton *)view;
+            [button setImage:nil forState:UIControlStateNormal];
+            [button setTitle:@"" forState:UIControlStateNormal];
+            [button setTitleColor:UIColor.clearColor forState:UIControlStateNormal];
+            button.backgroundColor = UIColor.clearColor;
+        }
+        if ([view isKindOfClass:UIVisualEffectView.class]) ((UIVisualEffectView *)view).effect = nil;
+    }
+    for (UIView *child in view.subviews.copy) [self suppressNativeVisualsInView:child root:NO];
+}
+
+- (void)restoreNativeVisuals {
+    for (NSDictionary *state in self.nativeVisualStates.reverseObjectEnumerator) {
+        UIView *view = state[@"view"];
+        if (![view isKindOfClass:UIView.class]) continue;
+        id bg = state[@"background"];
+        view.backgroundColor = bg == NSNull.null ? nil : bg;
+        if (state[@"textColor"] && [view isKindOfClass:UILabel.class]) {
+            id c = state[@"textColor"]; ((UILabel *)view).textColor = c == NSNull.null ? nil : c;
+        }
+        if (state[@"image"] && [view isKindOfClass:UIImageView.class]) {
+            id image = state[@"image"];
+            id highlighted = state[@"highlightedImage"];
+            ((UIImageView *)view).image = image == NSNull.null ? nil : image;
+            ((UIImageView *)view).highlightedImage = highlighted == NSNull.null ? nil : highlighted;
+        }
+        if (state[@"buttonTitle"] && [view isKindOfClass:UIButton.class]) {
+            UIButton *button = (UIButton *)view;
+            id image = state[@"buttonImage"];
+            id title = state[@"buttonTitle"];
+            id color = state[@"buttonTitleColor"];
+            [button setImage:(image == NSNull.null ? nil : image) forState:UIControlStateNormal];
+            [button setTitle:(title == NSNull.null ? nil : title) forState:UIControlStateNormal];
+            [button setTitleColor:(color == NSNull.null ? nil : color) forState:UIControlStateNormal];
+        }
+        if (state[@"effect"] && [view isKindOfClass:UIVisualEffectView.class]) {
+            id effect = state[@"effect"]; ((UIVisualEffectView *)view).effect = effect == NSNull.null ? nil : effect;
+        }
+        [self restoreLayerState:state[@"layer"]];
+    }
+    [self.nativeVisualStates removeAllObjects];
+    self.nativeVisualStates = nil;
 }
 
 - (CGRect)frameInPanel:(CGFloat)height {
     UIView *canvas = self.panelParent;
     if (!canvas) return CGRectZero;
     CGFloat width = MIN(MAX(260.0, self.preferredWidth), MAX(260.0, CGRectGetWidth(canvas.bounds) - 12.0));
-    CGFloat centerX = CGRectGetWidth(canvas.bounds) * ((self.anchorRatio > 0.08 && self.anchorRatio < 0.92) ? self.anchorRatio : 0.5);
-    CGFloat left = MAX(6.0, MIN(centerX - width * 0.5, CGRectGetWidth(canvas.bounds) - width - 6.0));
-    CGRect anchor = self.originalHost ? [self.originalHost convertRect:self.originalHost.bounds toView:canvas] : CGRectMake(0, 0, CGRectGetWidth(canvas.bounds), 44.0);
-    CGFloat top = MAX(2.0, CGRectGetMinY(anchor));
+    CGPoint anchor = [self.panelWindow convertPoint:CGPointMake(self.anchorScreenX, self.anchorScreenY) toWindow:canvas.window];
+    CGFloat xAnchor = anchor.x > 0.0 ? anchor.x : CGRectGetWidth(canvas.bounds) * 0.5;
+    CGFloat left = MAX(4.0, MIN(xAnchor - width * 0.5, CGRectGetWidth(canvas.bounds) - width - 4.0));
+    // In landscape the Dynamic Island can overlay the SpringBoard card header.
+    // Leave a clear gap below the native capsule so the temperature column isn't masked.
+    CGFloat top = MAX(58.0, anchor.y + 10.0);
     CGFloat h = MIN(height, MAX(1.0, CGRectGetHeight(canvas.bounds) - top - 4.0));
     return CGRectMake(left, top, width, h);
 }
@@ -141,6 +350,10 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         [self.container removeFromSuperview];
         [self.panelParent addSubview:self.container];
     }
+    if (self.overlayWindow && self.panelParent == self.overlayWindow.rootViewController.view) {
+        self.overlayWindow.cardContainer = self.container;
+        self.window = self.overlayWindow;
+    }
     self.container.frame = self.panelParent.bounds;
     self.container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     if (self.card.superview != self.container) {
@@ -149,6 +362,10 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     }
     self.container.hidden = NO;
     self.card.hidden = NO;
+    if ([self.panelParent.window isKindOfClass:PGOverlayWindow.class]) {
+        ((PGOverlayWindow *)self.panelParent.window).cardContainer = self.container;
+        self.window = self.panelParent.window;
+    }
     [self.panelParent bringSubviewToFront:self.container];
 }
 
@@ -158,12 +375,30 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     void (^block)(void) = ^{ self.card.frame = frame; [self.card setNeedsLayout]; [self.card layoutIfNeeded]; };
     if (animated) [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:block completion:nil];
     else block();
+    if (self.isOverlayActive && self.overlayWindow) {
+        CGPoint anchor = [self.panelWindow convertPoint:CGPointMake(self.anchorScreenX, self.anchorScreenY) toWindow:self.overlayWindow];
+        CGFloat width = MIN(frame.size.width, CGRectGetWidth(self.overlayWindow.bounds) - 8.0);
+        CGFloat x = MAX(4.0, MIN(anchor.x - width * 0.5, CGRectGetWidth(self.overlayWindow.bounds) - width - 4.0));
+        CGFloat overlayY = MAX(58.0, anchor.y + 10.0);
+        CGRect overlayFrame = CGRectMake(x, overlayY, width, frame.size.height);
+        self.card.frame = overlayFrame;
+        [self.card setNeedsLayout];
+        [self.card layoutIfNeeded];
+    }
 }
 
 - (void)resizeForHeight:(CGFloat)height {
     if (!self.card || !self.panelParent) return;
     CGRect frame = [self frameInPanel:height];
     [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:^{ self.card.frame = frame; [self.card setNeedsLayout]; [self.card layoutIfNeeded]; } completion:nil];
+    if (self.isOverlayActive && self.overlayWindow) {
+        CGPoint anchor = [self.panelWindow convertPoint:CGPointMake(self.anchorScreenX, self.anchorScreenY) toWindow:self.overlayWindow];
+        CGFloat width = MIN(frame.size.width, CGRectGetWidth(self.overlayWindow.bounds) - 8.0);
+        CGFloat x = MAX(4.0, MIN(anchor.x - width * 0.5, CGRectGetWidth(self.overlayWindow.bounds) - width - 4.0));
+        self.card.frame = CGRectMake(x, MAX(anchor.y + 2.0, 4.0), width, height);
+        [self.card setNeedsLayout];
+        [self.card layoutIfNeeded];
+    }
 }
 
 #pragma mark 生命周期
@@ -178,7 +413,6 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     self.originalHost = host;
 
     if (chevron) {
-        if (self.chevron && self.chevron != chevron && self.hasChevronState) self.chevron.hidden = self.chevronWasHidden;
         if (self.chevron != chevron) { self.chevronWasHidden = chevron.hidden; self.hasChevronState = YES; }
         self.chevron = chevron;
     }
@@ -193,10 +427,23 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     }
 
     self.panelParent = [self panelCanvasForHost:host];
+    UIView *nativeBackdrop = [grabber isKindOfClass:UIView.class] ? (UIView *)grabber : (PGTongueBackdropView(grabber) ?: PGNamedTongueView(grabber, @"_tongueContainer") ?: PGTongueView(grabber) ?: host);
+    self.nativeBackdrop = nativeBackdrop;
+    if (!self.hasNativeBackdropState) {
+        self.nativeBackdropWasHidden = nativeBackdrop.hidden;
+        self.hasNativeBackdropState = YES;
+    }
+    // Keep the gesture-bearing grabber visible and clear only its rendered capsule layers.
     if (chevron && self.panelParent) {
         CGRect rect = [chevron convertRect:chevron.bounds toView:self.panelParent];
         CGFloat canvasWidth = MAX(CGRectGetWidth(self.panelParent.bounds), 1.0);
-        if (!CGRectIsEmpty(rect)) self.anchorRatio = CGRectGetMidX(rect) / canvasWidth;
+        if (!CGRectIsEmpty(rect)) {
+            self.anchorRatio = CGRectGetMidX(rect) / canvasWidth;
+            self.anchorY = CGRectGetMinY(rect);
+            CGRect screenRect = [chevron convertRect:chevron.bounds toView:self.panelWindow];
+            self.anchorScreenX = CGRectGetMidX(screenRect);
+            self.anchorScreenY = CGRectGetMaxY(screenRect);
+        }
     }
     [self attachToWindow:window];
     if (chevron) chevron.hidden = YES;
@@ -204,22 +451,32 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 
     [self refresh];
     [self.card startUpdating];
+    [self suppressNativeVisualsInView:nativeBackdrop root:YES];
+    if (self.card.isExpanded) [self keepAfterPanelDismiss];
     if (PerfectGrabberPreferences.sharedPreferences.vibrationFeedback) AudioServicesPlaySystemSound(1519);
     PGDebugLog(@"[PG] present in %@", NSStringFromClass(window.class));
 }
 
-/// 真正嵌入原生面板：面板收起时卡片随系统离屏，释放面板视图树中的容器；
-/// 卡片模型保留，下一次下拉可复用。不会移入游戏上方或额外 UIWindow。
+/// 面板的 dismiss 通知不应把已展开的卡片复位或卸载；卡片继续留在同一面板窗口视图树。
+/// 这也是“常显/不会自己缩回”的关键：仅设置控件和用户手动箭头改变展开态。
 - (void)keepAfterPanelDismiss {
-    if (!self.presented || !self.card) return;
-    [self.card stopUpdating];
-    self.card.hidden = YES;
-    [self.container removeFromSuperview];
-    self.container = nil;
-    self.panelParent = nil;
-    if (self.chevron && self.hasChevronState) self.chevron.hidden = self.chevronWasHidden;
-    self.presented = NO;
-    PGDebugLog(@"[PG] embedded card detached with native panel");
+    if (!self.card || !self.container || !self.overlayWindow || self.isOverlayActive) return;
+    if (self.nativeBackdrop) [self suppressNativeVisualsInView:self.nativeBackdrop root:YES];
+    self.isOverlayActive = YES;
+    self.panelParent = self.overlayWindow.rootViewController.view;
+    self.window = self.overlayWindow;
+    self.card.hidden = NO;
+    self.container.hidden = NO;
+    self.container.frame = self.panelParent.bounds;
+    self.container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    if (self.container.superview != self.panelParent) {
+        [self.container removeFromSuperview];
+        [self.panelParent addSubview:self.container];
+    }
+    self.overlayWindow.cardContainer = self.container;
+    [self.panelParent bringSubviewToFront:self.container];
+    [self applyLayoutAnimated:NO];
+    PGDebugLog(@"[PG] card transferred to persistent game overlay");
 }
 
 - (void)refresh {
@@ -241,9 +498,17 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 
 - (void)longPressChanged:(BOOL)active {
     self.card.deferNativeGrabberDismissal = active;
+    if (active && self.card.isExpanded) [self keepAfterPanelDismiss];
 }
 
 - (void)hide {
+    if (self.overlayWindow) {
+        self.overlayWindow.cardContainer = nil;
+        self.overlayWindow.hidden = YES;
+        self.overlayWindow = nil;
+    }
+    [self restoreNativeVisuals];
+    if (self.nativeBackdrop && self.hasNativeBackdropState) self.nativeBackdrop.hidden = self.nativeBackdropWasHidden;
     PGGrabberOverlayView *card = self.card;
     [card stopUpdating];
     [card removeFromSuperview];

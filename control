@@ -1,6 +1,6 @@
 Package: com.netskao.perfectgrabber
 Name: Ntonia-PreferenceLoader
-Version: 1.1-60
+Version: 1.1-61
 Architecture: iphoneos-arm64
 Description: 原生面板内嵌实验测试版，状态/音乐信息与长按播放控制（RootHide）
 Maintainer: Huayuarc
