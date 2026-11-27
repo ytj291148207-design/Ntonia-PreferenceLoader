@@ -625,7 +625,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.62) weight:UIFontWeightLight];
         CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 8.0 * scale;
         CGFloat controlsWidth = MIN(112.0 * scale, width * 0.30);
-        CGFloat controlsX = width - sidePad - controlsWidth;
+        CGFloat controlsX = width - basePad - controlsWidth;
         CGFloat textW = MAX(48.0, controlsX - tx - 8.0 * scale);
         self.titleLabel.frame = CGRectMake(tx, contentY - 1.0 * scale, textW, 16.0 * scale);
         self.artistLabel.frame = CGRectMake(tx, contentY + 15.0 * scale, textW, 14.0 * scale);
@@ -642,7 +642,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         CGFloat buttonSize = 28.0 * scale;
         CGFloat gap = 5.0 * scale;
         CGFloat buttonY = contentY + 5.0 * scale;
-        CGFloat buttonStart = width - sidePad - (buttonSize * 3.0 + gap * 2.0);
+        CGFloat buttonStart = width - basePad - (buttonSize * 3.0 + gap * 2.0);
         self.previousButton.frame = CGRectMake(buttonStart, buttonY, buttonSize, buttonSize);
         self.playPauseButton.frame = CGRectMake(buttonStart + buttonSize + gap, buttonY, buttonSize, buttonSize);
         self.nextButton.frame = CGRectMake(buttonStart + (buttonSize + gap) * 2.0, buttonY, buttonSize, buttonSize);
