@@ -106,11 +106,8 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 @implementation PGOverlayRootController
 - (BOOL)shouldAutorotate { return YES; }
 - (UIInterfaceOrientation)pgCurrentInterfaceOrientation {
-    // SpringBoard's auxiliary scene can report portrait while a foreground
-    // landscape app is visible. Prefer system interface orientation when it
-    // has a valid value, then fall back to the target scene.
-    UIInterfaceOrientation statusOrientation = UIApplication.sharedApplication.statusBarOrientation;
-    if (statusOrientation != UIInterfaceOrientationUnknown) return statusOrientation;
+    // Use the associated scene's interface orientation; if unavailable,
+    // infer the rotation from the physical device orientation.
     UIInterfaceOrientation sceneOrientation = self.targetScene.interfaceOrientation;
     if (sceneOrientation != UIInterfaceOrientationUnknown) return sceneOrientation;
     UIDeviceOrientation device = UIDevice.currentDevice.orientation;
@@ -160,7 +157,6 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 + (instancetype)shared;
 - (void)presentFromHost:(UIView *)host chevron:(UIView *)chevron grabber:(id)grabber;
 - (void)keepAfterPanelDismiss;
-- (void)dockCardAfterPanelDismiss;
 - (void)resizeForHeight:(CGFloat)height;
 - (void)longPressChanged:(BOOL)active;
 - (void)refresh;
@@ -183,10 +179,6 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(orientationDidChange:)
                                                      name:UIDeviceOrientationDidChangeNotification
-                                                   object:nil];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(orientationDidChange:)
-                                                     name:UIApplicationDidChangeStatusBarOrientationNotification
                                                    object:nil];
     }
     return self;
