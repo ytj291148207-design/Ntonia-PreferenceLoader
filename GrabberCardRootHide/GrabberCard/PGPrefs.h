@@ -18,6 +18,8 @@ FOUNDATION_EXPORT NSInteger PGGetInt(NSString *key, NSInteger fallback);
 FOUNDATION_EXPORT void PGSetPref(NSString *key, id value);
 FOUNDATION_EXPORT void PGRemoveAllPrefs(void);
 FOUNDATION_EXPORT void PGPostPrefsChanged(void);
+/* 清空内存缓存，下次读取时重新解析 plist（偏好变更通知里调用） */
+FOUNDATION_EXPORT void PGInvalidatePrefsCache(void);
 
 /* default values used by both sides */
 FOUNDATION_EXPORT NSDictionary *PGDefaultPrefs(void);

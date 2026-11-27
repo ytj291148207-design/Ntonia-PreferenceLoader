@@ -2,6 +2,10 @@
 //  PGPrefs.m
 //  GrabberCard
 //
+//  偏好存取：内存缓存 + 文件 mtime 校验。
+//  旧实现每读一个键都把 plist 从磁盘读一遍并解析一次，卡片每 0.5 秒刷新时
+//  会有十几次 fontScale / fontWeight 读取，全是磁盘 IO，这里改成缓存。
+//
 
 #import "PGPrefs.h"
 #import <notify.h>
@@ -45,28 +49,62 @@ NSString *PGPrefPath(void) {
     return path;
 }
 
-static NSMutableDictionary *PGLoadDictionary(void) {
-    NSDictionary *raw = [NSDictionary dictionaryWithContentsOfFile:PGPrefPath()];
-    NSMutableDictionary *merged = [PGDefaultPrefs() mutableCopy];
-    if (raw) {
-        for (NSString *key in raw) {
-            if (!raw[key]) continue;
-            merged[key] = raw[key];
-        }
-    }
-    return merged;
-}
+#pragma mark - 缓存
 
-static id PGPrefsLock(void) {
+static id PGPrefsLockObject(void) {
     static id lock = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ lock = [[NSObject alloc] init]; });
     return lock;
 }
 
+static NSMutableDictionary *PGCachedPrefs = nil;
+static NSDate *PGCachedMtime = nil;
+static NSTimeInterval PGLastCacheCheck = 0;
+
+void PGInvalidatePrefsCache(void) {
+    @synchronized (PGPrefsLockObject()) {
+        PGCachedPrefs = nil;
+        PGCachedMtime = nil;
+        PGLastCacheCheck = 0;
+    }
+}
+
+static NSDate *PGCurrentFileMtime(void) {
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:PGPrefPath() error:nil];
+    return attrs[NSFileModificationDate];
+}
+
+// 最多每 0.25 秒 stat 一次文件；命中缓存时直接返回内存里的字典。
+static void PGEnsurePrefsCache(void) {
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (PGCachedPrefs && (now - PGLastCacheCheck) < 0.25) return;
+    PGLastCacheCheck = now;
+
+    NSDate *mtime = PGCurrentFileMtime();
+    if (PGCachedPrefs) {
+        if (!mtime && !PGCachedMtime) return;      // 文件一直不存在
+        if (mtime && PGCachedMtime && [mtime isEqualToDate:PGCachedMtime]) return;
+    }
+
+    NSMutableDictionary *merged = [PGDefaultPrefs() mutableCopy];
+    NSDictionary *raw = [NSDictionary dictionaryWithContentsOfFile:PGPrefPath()];
+    if (raw) {
+        for (NSString *key in raw) {
+            if (!raw[key]) continue;
+            merged[key] = raw[key];
+        }
+    }
+    PGCachedPrefs = merged;
+    PGCachedMtime = mtime;
+}
+
+#pragma mark - 读取
+
 NSDictionary *PGAllPrefs(void) {
-    @synchronized (PGPrefsLock()) {
-        return [PGLoadDictionary() copy];
+    @synchronized (PGPrefsLockObject()) {
+        PGEnsurePrefsCache();
+        return [PGCachedPrefs copy];
     }
 }
 
@@ -98,6 +136,8 @@ NSInteger PGGetInt(NSString *key, NSInteger fallback) {
     return fallback;
 }
 
+#pragma mark - 写入
+
 void PGSetPref(NSString *key, id value) {
     if (!key) return;
     NSString *path = PGPrefPath();
@@ -123,14 +163,20 @@ void PGSetPref(NSString *key, id value) {
                                                                error:nil];
     if (data) {
         [data writeToFile:path atomically:YES];
+        @synchronized (PGPrefsLockObject()) {
+            PGCachedPrefs = [prefs mutableCopy];
+            PGCachedMtime = PGCurrentFileMtime();
+            PGLastCacheCheck = [NSDate timeIntervalSinceReferenceDate];
+        }
     }
 }
 
 void PGRemoveAllPrefs(void) {
     [[NSFileManager defaultManager] removeItemAtPath:PGPrefPath() error:nil];
+    PGInvalidatePrefsCache();
 }
 
 void PGPostPrefsChanged(void) {
+    // notify_post 要的是 C 字符串，不能用 NSString 字面量。
     notify_post("com.grabbercard.prefs.changed");
 }
-

@@ -1,3 +1,81 @@
+# 1.1-63 修复：方向、关闭按钮、进度条实时性
+
+本版只改 `GrabberCardRootHide/GrabberCard`（RootHide 打包用的那套实现），顶层 `Tweak.xm` 旧实现未动。
+
+## 1. 卡片方向不对
+
+旧实现把卡片塞进 `SBGrabberTongue` 所在的面板窗口，用 `host.bounds` 竖屏坐标布局，并且
+卡片固定画在锚点**下方**。横屏游戏里抓取条在左边缘，`y = 锚点.maxY + 8` 算出来放不下，
+又被夹回屏幕左上角；自建的 `UIWindow` 还是按 `[UIScreen mainScreen].bounds` 建的，没有
+`rootViewController`，横屏时窗口本身不会转，所以卡片看起来是横的/跑偏。
+
+现在：
+
+- 卡片挂在与原生面板**同一个 `UIWindowScene`** 的独立窗口（`initWithWindowScene:`），
+  窗口带 `rootViewController`，`supportedInterfaceOrientations` 返回全方向，跟着设备转；
+- 布局改成"离哪条边最近就贴哪一侧"：上边缘 → 画在下方，左边缘 → 画在右侧，
+  右边缘 → 画在左侧，下边缘 → 画在上方，再按 `safeAreaInsets` 夹进屏幕；
+- 旋转 / 状态栏变化都会重新对位。
+
+## 2. 没有关闭按钮、卡片缩不回去
+
+旧实现右上角是一个 `chevron.up` 按钮，白字白底放在浅色毛玻璃上几乎看不见，而且
+`layoutSubviews` 每次都会把统计标签盖在它上面；卡片被 `frontDisplayDidChange:` 钩子
+在切前台时直接移除，用户也没有稳定的关闭入口。
+
+现在：
+
+- 右上角常驻 **× 关闭按钮**（`PGCloseButton`，32pt，热区扩到 48pt），深色半透明底 + 白色
+  图标，任何背景下都看得见；每次布局后 `bringSubviewToFront`，不再被标签盖住；
+- 顶部小横条改成按钮，点一下即可**展开 / 收起**（长按仍然可用）；
+- 关闭后卡片和覆盖窗口一起移除，下次下拉重新出现；不再在 `frontDisplayDidChange:` 里
+  偷偷移除卡片。
+
+## 3. 拉进度条不实时
+
+- `PGProgressBar.setProgress:` 里直接重算 fill / knob 的 frame，不再等 `layoutSubviews`；
+- 进度条纵向热区从 4pt 扩到 44pt，手指不用精确戳在细线上；
+- 拖动时 `scrubbing = YES`，0.5 秒刷新不会把进度拉回去；松手 seek 后 1.2 秒内忽略
+  播放器回传的旧进度（`_seekHoldUntil`），避免"拉完又弹回"；
+- 显示进度不再完全依赖播放器回传：记录 `_lastSyncElapsed / _lastSyncTime`，按
+  `playbackRate` 本地推算，播放器回传值与推算值差超过 1.5 秒才重新对齐，进度条每 0.5 秒
+  平滑前进；暂停时速率归零，不会乱走。
+
+## 4. 触摸穿透
+
+旧的覆盖窗口 `userInteractionEnabled = YES` 且整屏只有一个卡片子视图，`UIWindow.hitTest`
+会返回窗口本身 —— 面板收起后**整块屏幕都点不动**。现在：
+
+- `PGOverlayWindow.hitTest` 只在命中卡片容器时返回视图，其余返回 `nil`；
+- `PGCardContainer.hitTest` 只把落在卡片 `bounds` 内的点转给卡片。
+
+## 5. 顺手修掉的问题
+
+- **设置面板会把系统 API 换掉**：旧 `Settings.m` 给 `PSSpecifier` 加了个和系统方法同名的
+  分类（只是参数类型不同），等于替换了整个 Preferences 进程里的
+  `+preferenceSpecifierNamed:...cell:edit:`，别的面板传 `NSInteger` 进来会被当 Class 指针
+  直接崩。改成 `pg_` 前缀的独立方法，内部仍调用系统 API。
+- 滑杆把存进去的 `0`（圆角 0、透明度 0）当成"没设置"而回落默认值；改成 `stored != nil`。
+- 时间格式分段默认显示"12 小时"但实际按 24 小时走：索引改成 1 = 24 小时，与布尔值一致。
+- 偏好读取加内存缓存（`PGAllPrefs` 最多 0.25 秒 stat 一次文件），之前每取一个键都要
+  读盘 + 解析 plist。
+- 封面只在数据变化时重新解码，之前每 0.5 秒 `imageWithData:` 一次。
+- 电量/温度/CPU 降到 2 秒采样一次；卡片不在窗口里时停掉定时器。
+- 歌词 `NSURLSession` 用完 `invalidateAndCancel`，不再泄漏。
+
+## 验证
+
+本次只做了静态结构检查（括号配平、`@interface`/`@implementation`/`@end` 配对、调用点
+一致性），**未在真机编译安装**。请在 iPhone 14 Pro Max / iOS 16.3.1 / Dopamine RootHide
+上重新用 GitHub Actions 构建 `GrabberCard_1.1-63+roothide` 安装验证，重点看：
+
+1. 横屏游戏里卡片是否贴在抓取条右侧且方向正确；
+2. × 是否能关掉卡片、顶部横条是否能收起；
+3. 拖动进度条是否跟手、松手是否弹回；
+4. 卡片以外的区域能否正常操作游戏。
+
+---
+
 # 1.1-59 修复：内容被圆角裁掉
 
 上一版把圆角做对了，但留白只按"行中心高度"算：胶囊顶部 y=3 处圆弧已经向内吃掉 10.9pt，

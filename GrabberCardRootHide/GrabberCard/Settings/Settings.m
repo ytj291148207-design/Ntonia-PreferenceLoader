@@ -29,26 +29,28 @@
 - (id)propertyForKey:(NSString *)key;
 @end
 
-// Settings calls a legacy, class-based convenience selector below. Translate
-// it to Apple's real PSSpecifier API (set:get:... with a PSCellType integer).
+// 旧版直接给 PSSpecifier 加了一个同名分类方法，选择器与系统
+// +preferenceSpecifierNamed:target:set:detail:cell:edit: 完全同名（只是参数类型不同），
+// 等于把整个 Preferences 进程里的系统实现换掉了：别的面板传 NSInteger 进来会被当成
+// Class 指针，直接崩。这里改成 pg_ 前缀的独立方法，内部仍然调用真正的系统 API。
 static NSString *const PGCustomCellKey = @"PGCustomCellClass";
 
 @interface PSSpecifier (GrabberCardFactory)
-+ (instancetype)preferenceSpecifierNamed:(NSString *)name
-                                  target:(id)target
-                                  setter:(SEL)setter
-                                  detail:(Class)detail
-                                     cell:(Class)cellClass
-                                     edit:(Class)edit;
++ (instancetype)pg_preferenceSpecifierNamed:(NSString *)name
+                                     target:(id)target
+                                     setter:(SEL)setter
+                                     detail:(Class)detail
+                                 cellClass:(Class)cellClass
+                                      edit:(Class)edit;
 @end
 
 @implementation PSSpecifier (GrabberCardFactory)
-+ (instancetype)preferenceSpecifierNamed:(NSString *)name
-                                  target:(id)target
-                                  setter:(SEL)setter
-                                  detail:(Class)detail
-                                     cell:(Class)cellClass
-                                     edit:(Class)edit {
++ (instancetype)pg_preferenceSpecifierNamed:(NSString *)name
+                                     target:(id)target
+                                     setter:(SEL)setter
+                                     detail:(Class)detail
+                                 cellClass:(Class)cellClass
+                                      edit:(Class)edit {
     NSString *customClassName = NSStringFromClass(cellClass);
     NSInteger systemCell = 7; // PSStaticTextCell
     if ([customClassName isEqualToString:@"PGGroupCell"]) systemCell = 0; // PSGroupCell
@@ -215,6 +217,7 @@ static UIColor *PGSettingsAccent(void) {
         [self.contentView addSubview:_valueLabel];
 
         _slider = [[UISlider alloc] init];
+        _slider.continuous = YES;   // 拖动过程就回调，不要等松手
         _slider.minimumTrackTintColor = PGSettingsAccent();
         [_slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
         [self.contentView addSubview:_slider];
@@ -237,8 +240,9 @@ static UIColor *PGSettingsAccent(void) {
     _slider.minimumValue = [_minValue floatValue];
     _slider.maximumValue = [_maxValue floatValue];
 
+    // 存了 0（比如圆角 0、透明度 0）也是合法值，不能用 > 0 判断是否使用默认值。
     NSNumber *stored = PGGetPref(_key, nil);
-    _slider.value = [stored floatValue] > 0 ? [stored floatValue] : [_defaultValue floatValue];
+    _slider.value = stored ? [stored floatValue] : [_defaultValue floatValue];
     [self updateValueLabel];
 }
 
@@ -306,7 +310,8 @@ static UIColor *PGSettingsAccent(void) {
     [titles enumerateObjectsUsingBlock:^(NSString *title, NSUInteger idx, BOOL *stop) {
         [_control insertSegmentWithTitle:title atIndex:idx animated:NO];
     }];
-    _control.selectedSegmentIndex = (NSInteger)PGGetInt(_key, 0);
+    NSInteger defaultIndex = [[specifier propertyForKey:@"default"] integerValue];
+    _control.selectedSegmentIndex = (NSInteger)PGGetInt(_key, defaultIndex);
 }
 
 - (void)controlChanged:(UISegmentedControl *)control {
@@ -455,29 +460,29 @@ static UIColor *PGSettingsAccent(void) {
     NSMutableArray *specs = [NSMutableArray array];
 
     // MARK: 头部
-    [specs addObject:[PSSpecifier preferenceSpecifierNamed:@""
+    [specs addObject:[PSSpecifier pg_preferenceSpecifierNamed:@""
                                                      target:nil
                                                      setter:NULL
                                                      detail:nil
-                                                       cell:[PGHeaderCell class]
+                                                       cellClass:[PGHeaderCell class]
                                                        edit:NULL]];
 
     // MARK: 总开关
-    [specs addObject:[PSSpecifier preferenceSpecifierNamed:@"启用插件"
-                                                     target:nil setter:NULL detail:nil cell:[PGGroupCell class] edit:NULL]];
-    PSSpecifier *enabled = [PSSpecifier preferenceSpecifierNamed:@"在抓取卡片中显示 GrabberCard"
+    [specs addObject:[PSSpecifier pg_preferenceSpecifierNamed:@"启用插件"
+                                                     target:nil setter:NULL detail:nil cellClass:[PGGroupCell class] edit:NULL]];
+    PSSpecifier *enabled = [PSSpecifier pg_preferenceSpecifierNamed:@"在抓取卡片中显示 GrabberCard"
                                                           target:self
                                                           setter:@selector(setPreferenceValue:specifier:)
                                                           detail:nil
-                                                            cell:[PGSwitchCell class]
+                                                            cellClass:[PGSwitchCell class]
                                                             edit:NULL];
     [enabled setProperty:@"enabled" forKey:@"key"];
     [enabled setProperty:@YES forKey:@"default"];
     [specs addObject:enabled];
 
     // MARK: 卡片外观
-    [specs addObject:[PSSpecifier preferenceSpecifierNamed:@"卡片外观"
-                                                     target:nil setter:NULL detail:nil cell:[PGGroupCell class] edit:NULL]];
+    [specs addObject:[PSSpecifier pg_preferenceSpecifierNamed:@"卡片外观"
+                                                     target:nil setter:NULL detail:nil cellClass:[PGGroupCell class] edit:NULL]];
 
     [specs addObject:[self sliderWithName:@"卡片大小" key:@"cardScale" min:0.8 max:1.3 defaultValue:1.0 suffix:@"×" integer:NO]];
     [specs addObject:[self sliderWithName:@"卡片宽度" key:@"cardWidth" min:240 max:430 defaultValue:356 suffix:@" pt" integer:YES]];
@@ -485,83 +490,84 @@ static UIColor *PGSettingsAccent(void) {
     [specs addObject:[self sliderWithName:@"卡片圆角" key:@"cornerRadius" min:0 max:40 defaultValue:24 suffix:@" pt" integer:YES]];
     [specs addObject:[self sliderWithName:@"卡片透明度" key:@"opacity" min:0.2 max:1.0 defaultValue:0.92 suffix:@"" integer:NO]];
 
-    [specs addObject:[self segmentWithName:@"背景质感" key:@"backgroundStyle" titles:@[@"毛玻璃", @"磨砂", @"高斯模糊"]]];
+    [specs addObject:[self segmentWithName:@"背景质感" key:@"backgroundStyle" titles:@[@"毛玻璃", @"磨砂", @"高斯模糊"] defaultIndex:0]];
 
     // MARK: 信息显示
-    [specs addObject:[PSSpecifier preferenceSpecifierNamed:@"信息显示"
-                                                     target:nil setter:NULL detail:nil cell:[PGGroupCell class] edit:NULL]];
-    [specs addObject:[self segmentWithName:@"时间格式" key:@"use24Hour" titles:@[@"24 小时", @"12 小时"]]];
+    [specs addObject:[PSSpecifier pg_preferenceSpecifierNamed:@"信息显示"
+                                                     target:nil setter:NULL detail:nil cellClass:[PGGroupCell class] edit:NULL]];
+    // use24Hour 存的是布尔值：索引 1 = 24 小时，正好对应 @YES，和 tweak 侧默认值一致。
+    [specs addObject:[self segmentWithName:@"时间格式" key:@"use24Hour" titles:@[@"12 小时", @"24 小时"] defaultIndex:1]];
     [specs addObject:[self sliderWithName:@"字体大小" key:@"fontScale" min:0.8 max:1.4 defaultValue:1.0 suffix:@"×" integer:NO]];
-    [specs addObject:[self segmentWithName:@"字体粗细" key:@"fontWeight" titles:@[@"常规", @"中等", @"半粗", @"加粗"]]];
+    [specs addObject:[self segmentWithName:@"字体粗细" key:@"fontWeight" titles:@[@"常规", @"中等", @"半粗", @"加粗"] defaultIndex:2]];
 
     // MARK: 音乐
-    [specs addObject:[PSSpecifier preferenceSpecifierNamed:@"音乐"
-                                                     target:nil setter:NULL detail:nil cell:[PGGroupCell class] edit:NULL]];
+    [specs addObject:[PSSpecifier pg_preferenceSpecifierNamed:@"音乐"
+                                                     target:nil setter:NULL detail:nil cellClass:[PGGroupCell class] edit:NULL]];
 
-    PSSpecifier *longPress = [PSSpecifier preferenceSpecifierNamed:@"长按卡片显示进度条与控制"
+    PSSpecifier *longPress = [PSSpecifier pg_preferenceSpecifierNamed:@"长按卡片显示进度条与控制"
                                                             target:self
                                                             setter:@selector(setPreferenceValue:specifier:)
                                                             detail:nil
-                                                              cell:[PGSwitchCell class]
+                                                              cellClass:[PGSwitchCell class]
                                                               edit:NULL];
     [longPress setProperty:@"longPressControls" forKey:@"key"];
     [longPress setProperty:@YES forKey:@"default"];
     [specs addObject:longPress];
 
-    PSSpecifier *lyrics = [PSSpecifier preferenceSpecifierNamed:@"显示歌词"
+    PSSpecifier *lyrics = [PSSpecifier pg_preferenceSpecifierNamed:@"显示歌词"
                                                           target:self
                                                           setter:@selector(setPreferenceValue:specifier:)
                                                           detail:nil
-                                                            cell:[PGSwitchCell class]
+                                                            cellClass:[PGSwitchCell class]
                                                             edit:NULL];
     [lyrics setProperty:@"showLyrics" forKey:@"key"];
     [lyrics setProperty:@YES forKey:@"default"];
     [specs addObject:lyrics];
 
     // MARK: 触感反馈
-    [specs addObject:[PSSpecifier preferenceSpecifierNamed:@"触感反馈"
-                                                     target:nil setter:NULL detail:nil cell:[PGGroupCell class] edit:NULL]];
+    [specs addObject:[PSSpecifier pg_preferenceSpecifierNamed:@"触感反馈"
+                                                     target:nil setter:NULL detail:nil cellClass:[PGGroupCell class] edit:NULL]];
 
-    PSSpecifier *presentHaptic = [PSSpecifier preferenceSpecifierNamed:@"下拉卡片时震动"
+    PSSpecifier *presentHaptic = [PSSpecifier pg_preferenceSpecifierNamed:@"下拉卡片时震动"
                                                                 target:self
                                                                 setter:@selector(setPreferenceValue:specifier:)
                                                                 detail:nil
-                                                                  cell:[PGSwitchCell class]
+                                                                  cellClass:[PGSwitchCell class]
                                                                   edit:NULL];
     [presentHaptic setProperty:@"presentHaptic" forKey:@"key"];
     [presentHaptic setProperty:@YES forKey:@"default"];
     [specs addObject:presentHaptic];
 
-    PSSpecifier *sliderHaptic = [PSSpecifier preferenceSpecifierNamed:@"拖动进度条逐格震动"
+    PSSpecifier *sliderHaptic = [PSSpecifier pg_preferenceSpecifierNamed:@"拖动进度条逐格震动"
                                                                 target:self
                                                                 setter:@selector(setPreferenceValue:specifier:)
                                                                 detail:nil
-                                                                  cell:[PGSwitchCell class]
+                                                                  cellClass:[PGSwitchCell class]
                                                                   edit:NULL];
     [sliderHaptic setProperty:@"sliderHaptic" forKey:@"key"];
     [sliderHaptic setProperty:@YES forKey:@"default"];
     [specs addObject:sliderHaptic];
 
     // MARK: 操作
-    [specs addObject:[PSSpecifier preferenceSpecifierNamed:@"操作"
-                                                     target:nil setter:NULL detail:nil cell:[PGGroupCell class] edit:NULL]];
+    [specs addObject:[PSSpecifier pg_preferenceSpecifierNamed:@"操作"
+                                                     target:nil setter:NULL detail:nil cellClass:[PGGroupCell class] edit:NULL]];
 
-    PSSpecifier *reset = [PSSpecifier preferenceSpecifierNamed:@"恢复默认设置"
+    PSSpecifier *reset = [PSSpecifier pg_preferenceSpecifierNamed:@"恢复默认设置"
                                                          target:self
                                                          setter:NULL
                                                          detail:nil
-                                                           cell:[PGButtonCell class]
+                                                           cellClass:[PGButtonCell class]
                                                            edit:NULL];
     [reset setProperty:@"reset" forKey:@"action"];
     [reset setProperty:self forKey:@"target"];
     [reset setProperty:@"danger" forKey:@"kind"];
     [specs addObject:reset];
 
-    PSSpecifier *respring = [PSSpecifier preferenceSpecifierNamed:@"注销 SpringBoard"
+    PSSpecifier *respring = [PSSpecifier pg_preferenceSpecifierNamed:@"注销 SpringBoard"
                                                            target:self
                                                            setter:NULL
                                                            detail:nil
-                                                             cell:[PGButtonCell class]
+                                                             cellClass:[PGButtonCell class]
                                                              edit:NULL];
     [respring setProperty:@"respring" forKey:@"action"];
     [respring setProperty:self forKey:@"target"];
@@ -578,7 +584,7 @@ static UIColor *PGSettingsAccent(void) {
                     defaultValue:(CGFloat)defaultValue
                          suffix:(NSString *)suffix
                         integer:(BOOL)isInteger {
-    PSSpecifier *spec = [PSSpecifier preferenceSpecifierNamed:name target:nil setter:NULL detail:nil cell:[PGSliderCell class] edit:NULL];
+    PSSpecifier *spec = [PSSpecifier pg_preferenceSpecifierNamed:name target:nil setter:NULL detail:nil cellClass:[PGSliderCell class] edit:NULL];
     [spec setProperty:key forKey:@"key"];
     [spec setProperty:@(min) forKey:@"min"];
     [spec setProperty:@(max) forKey:@"max"];
@@ -588,10 +594,14 @@ static UIColor *PGSettingsAccent(void) {
     return spec;
 }
 
-- (PSSpecifier *)segmentWithName:(NSString *)name key:(NSString *)key titles:(NSArray<NSString *> *)titles {
-    PSSpecifier *spec = [PSSpecifier preferenceSpecifierNamed:name target:nil setter:NULL detail:nil cell:[PGSegmentCell class] edit:NULL];
+- (PSSpecifier *)segmentWithName:(NSString *)name
+                             key:(NSString *)key
+                          titles:(NSArray<NSString *> *)titles
+                    defaultIndex:(NSInteger)defaultIndex {
+    PSSpecifier *spec = [PSSpecifier pg_preferenceSpecifierNamed:name target:nil setter:NULL detail:nil cellClass:[PGSegmentCell class] edit:NULL];
     [spec setProperty:key forKey:@"key"];
     [spec setProperty:titles forKey:@"titles"];
+    [spec setProperty:@(defaultIndex) forKey:@"default"];
     return spec;
 }
 
