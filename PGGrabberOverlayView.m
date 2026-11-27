@@ -45,7 +45,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @property (nonatomic, strong) UILabel *batteryLabel;
 @property (nonatomic, strong) UILabel *temperatureLabel;
 @property (nonatomic, strong) UILabel *cpuLabel;
-@property (nonatomic, strong) UIButton *closeButton;
+@property (nonatomic, strong) UIButton *closeButton; // chevron: expand/collapse
+@property (nonatomic, strong) UIButton *dismissButton; // xmark: remove the card
 @property (nonatomic, strong) UIImageView *artworkView;
 @property (nonatomic, strong) UILabel *artworkFallbackLabel;
 @property (nonatomic, strong) UILabel *titleLabel;
@@ -83,6 +84,21 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @end
 
 @implementation PGGrabberOverlayView
+
+// Ensure the explicit × dismiss target wins over the long-press recognizer and
+// remains easy to hit even when compact mode scales the visible glyph down.
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    if (!self.hidden && self.userInteractionEnabled && !self.dismissButton.hidden) {
+        // Keep the neighboring chevron's own hit area intact; expand only the
+        // remaining margin around the visible × dismissal control.
+        if (!self.closeButton.hidden && CGRectContainsPoint(self.closeButton.frame, point)) {
+            return [super hitTest:point withEvent:event];
+        }
+        CGRect dismissHit = CGRectInset(self.dismissButton.frame, -6.0, -6.0);
+        if (CGRectContainsPoint(dismissHit, point)) return self.dismissButton;
+    }
+    return [super hitTest:point withEvent:event];
+}
 
 @synthesize cardScale = _cardScale;
 @synthesize blurAmount = _blurAmount;
@@ -173,6 +189,18 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     _closeButton.accessibilityLabel = @"展开卡片内容";
     [_closeButton addTarget:self action:@selector(toggleExpandedTapped) forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:_closeButton];
+
+    _dismissButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIImage *dismissImage = [UIImage systemImageNamed:@"xmark"];
+    if (dismissImage) [_dismissButton setImage:dismissImage forState:UIControlStateNormal];
+    else [_dismissButton setTitle:@"×" forState:UIControlStateNormal];
+    _dismissButton.accessibilityLabel = @"关闭卡片";
+    _dismissButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.18];
+    _dismissButton.layer.cornerRadius = 12.0;
+    _dismissButton.clipsToBounds = YES;
+    _dismissButton.tintColor = UIColor.whiteColor;
+    [_dismissButton addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+    [self addSubview:_dismissButton];
 
     _artworkView = [UIImageView new];
     _artworkView.contentMode = UIViewContentModeScaleAspectFill;
@@ -375,9 +403,10 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 - (CGFloat)heightForWidth:(CGFloat)width {
     CGFloat scale = PGClamp(self.cardScale, 0.65, 1.60);
     if (self.compactMode && self.isExpanded) {
-        CGFloat vertical = PGClamp(self.cardHeightScale, 0.70, 1.60);
-        CGFloat controlContentHeight = (193.0 * vertical + 24.0) * scale;
-        return MAX(220.0 * vertical * scale, controlContentHeight);
+        // Landscape media controls use a single horizontal content row plus
+        // seek bar; no tall portrait-style stack over the game.
+        CGFloat vertical = PGClamp(self.cardHeightScale, 0.70, 1.20);
+        return PGClamp(104.0 * vertical * scale, 92.0 * scale, 128.0 * scale);
     }
     CGFloat height = self.compactMode ? 44.0 : (112.0 + (self.isExpanded ? 64.0 * self.cardHeightScale : 0.0));
     return MAX(44.0, height * scale);
@@ -470,6 +499,10 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.lyricsLabel.textColor = [textColor colorWithAlphaComponent:0.64];
     self.artworkFallbackLabel.textColor = textColor;
     self.closeButton.tintColor = textColor;
+    self.dismissButton.tintColor = textColor;
+    self.dismissButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.20];
+    self.dismissButton.layer.borderWidth = 0.5;
+    self.dismissButton.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.28].CGColor;
 
     self.timeLabel.font = [self configuredFontWithSize:14.0 weight:UIFontWeightSemibold];
     for (UILabel *label in @[_batteryLabel, _temperatureLabel, _cpuLabel]) {
@@ -505,13 +538,14 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     if (self.compactMode) {
         CGFloat radius = [self pgEffectiveCornerRadius];
         CGFloat basePad = 6.0 * scale;
-        CGFloat close = 20.0 * scale;
+        CGFloat close = 18.0 * scale;
+        CGFloat dismiss = 20.0 * scale;
         CGFloat row = 17.0 * scale;
         // 状态行贴着上边，是圆角吃得最狠的一行。必须按整行（顶边到底边）算内缩，
         // 只按中心高度算会让顶边伸进弧线，时间首位数字被切掉。
         CGFloat statusY = 3.0 * scale;
         CGFloat statusInset = basePad + PGFrameInset(statusY, statusY + row, height, radius);
-        CGFloat statusRight = MAX(0.0, width - statusInset - close - 3.0 * scale);
+        CGFloat statusRight = MAX(0.0, width - statusInset - close - dismiss - 7.0 * scale);
         CGFloat rowWidth = MAX(0.0, statusRight - statusInset);
         // Keep metrics in one compact row. The previous center gap left a blank
         // block beneath Dynamic Island, so reclaim it for the temperature field.
@@ -531,12 +565,17 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
             label.hidden = NO;
         }
         CGFloat closeInset = PGFrameInset(statusY, statusY + close, height, radius);
-        self.closeButton.frame = CGRectMake(width - closeInset - basePad - close, statusY, close, close);
+        self.closeButton.frame = CGRectMake(width - closeInset - basePad - close - dismiss - 4.0 * scale,
+                                            statusY, close, close);
         self.closeButton.hidden = NO;
         UIImage *toggleImage = [UIImage systemImageNamed:(self.isExpanded ? @"chevron.up" : @"chevron.down")];
         if (toggleImage) [self.closeButton setImage:toggleImage forState:UIControlStateNormal];
         else [self.closeButton setTitle:(self.isExpanded ? @"⌃" : @"⌄") forState:UIControlStateNormal];
         self.closeButton.accessibilityLabel = self.isExpanded ? @"收起卡片内容" : @"展开卡片内容";
+        self.dismissButton.frame = CGRectMake(width - closeInset - basePad - dismiss,
+                                              statusY - 1.5 * scale, dismiss, dismiss);
+        self.dismissButton.layer.cornerRadius = 5.0 * scale;
+        self.dismissButton.hidden = NO;
 
         if (!self.isExpanded) {
             CGFloat y = 21.0 * scale, art = 20.0 * scale;
@@ -545,7 +584,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
             self.artworkView.layer.cornerRadius = 5.0 * scale;
             self.artworkFallbackLabel.frame = self.artworkView.frame;
             CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 6.0 * scale;
-            CGFloat titleWidth = MAX(0.0, width - tx - basePad - close - 3.0 * scale);
+            CGFloat titleWidth = MAX(0.0, width - tx - basePad - close - dismiss - 7.0 * scale);
             self.titleLabel.frame = CGRectMake(tx, y - 1.0 * scale, titleWidth, 13.0 * scale);
             self.artistLabel.frame = CGRectMake(tx, y + 10.0 * scale, titleWidth, 11.0 * scale);
             self.titleLabel.font = [self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];
@@ -572,52 +611,54 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
             self.playPauseButton.hidden = YES;
             self.nextButton.hidden = YES;
             self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.62) weight:UIFontWeightLight];
+            [self bringSubviewToFront:self.closeButton];
+            [self bringSubviewToFront:self.dismissButton];
             return;
         }
 
-        CGFloat availableVertical = MAX(0.70, (height / MAX(scale, 0.65) - 24.0) / 193.0);
-        CGFloat verticalScale = scale * MIN(self.cardHeightScale, availableVertical);
-        CGFloat art = 48.0 * scale;
-        CGFloat y = 25.0 * verticalScale;
-        CGFloat contentInset = basePad + PGFrameInset(y, y + art, height, radius);
-        self.artworkView.frame = CGRectMake(contentInset, y, art, art);
-        self.artworkView.layer.cornerRadius = 8.0 * scale;
+        CGFloat art = MIN(38.0 * scale, MAX(30.0, height - 44.0 * scale));
+        CGFloat contentY = 29.0 * scale;
+        CGFloat contentInset = basePad + PGFrameInset(contentY, contentY + art, height, radius);
+        self.artworkView.frame = CGRectMake(contentInset, contentY, art, art);
+        self.artworkView.layer.cornerRadius = 7.0 * scale;
         self.artworkFallbackLabel.frame = self.artworkView.frame;
-        CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 9.0 * scale;
-        CGFloat textW = MAX(24.0, width - tx - basePad - 8.0 * scale);
-        self.titleLabel.frame = CGRectMake(tx, y, textW, 18.0 * verticalScale);
-        self.artistLabel.frame = CGRectMake(tx, y + 17.0 * verticalScale, textW, 15.0 * verticalScale);
-        self.lyricsLabel.frame = CGRectMake(tx, y + 32.0 * verticalScale, textW, 17.0 * verticalScale);
-        self.titleLabel.font = [self configuredFontWithSize:13.0 weight:UIFontWeightSemibold];
-        self.artistLabel.font = [self configuredFontWithSize:10.0 weight:UIFontWeightRegular];
-        self.lyricsLabel.font = [self configuredFontWithSize:10.0 weight:UIFontWeightRegular];
+        self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.62) weight:UIFontWeightLight];
+        CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 8.0 * scale;
+        CGFloat controlsWidth = MIN(112.0 * scale, width * 0.30);
+        CGFloat controlsX = width - sidePad - controlsWidth;
+        CGFloat textW = MAX(48.0, controlsX - tx - 8.0 * scale);
+        self.titleLabel.frame = CGRectMake(tx, contentY - 1.0 * scale, textW, 16.0 * scale);
+        self.artistLabel.frame = CGRectMake(tx, contentY + 15.0 * scale, textW, 14.0 * scale);
+        self.lyricsLabel.frame = CGRectMake(tx, contentY + 28.0 * scale, textW, 14.0 * scale);
+        self.titleLabel.font = [self configuredFontWithSize:12.0 weight:UIFontWeightSemibold];
+        self.artistLabel.font = [self configuredFontWithSize:9.0 weight:UIFontWeightRegular];
+        self.lyricsLabel.font = [self configuredFontWithSize:9.0 weight:UIFontWeightRegular];
         self.artworkView.hidden = NO;
         self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
         self.titleLabel.hidden = NO;
         self.artistLabel.hidden = NO;
         self.lyricsLabel.hidden = NO;
-        self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.62) weight:UIFontWeightLight];
 
-        CGFloat bs = 32.0 * scale, gap = 28.0 * scale;
-        CGFloat controlY = 112.0 * verticalScale;
-        CGFloat controlsWidth = bs * 3.0 + gap * 2.0;
-        CGFloat startX = MAX(contentInset, (width - controlsWidth) * 0.5);
-        self.previousButton.frame = CGRectMake(startX, controlY, bs, bs);
-        self.playPauseButton.frame = CGRectMake(startX + bs + gap, controlY, bs, bs);
-        self.nextButton.frame = CGRectMake(startX + (bs + gap) * 2.0, controlY, bs, bs);
+        CGFloat buttonSize = 28.0 * scale;
+        CGFloat gap = 5.0 * scale;
+        CGFloat buttonY = contentY + 5.0 * scale;
+        CGFloat buttonStart = width - sidePad - (buttonSize * 3.0 + gap * 2.0);
+        self.previousButton.frame = CGRectMake(buttonStart, buttonY, buttonSize, buttonSize);
+        self.playPauseButton.frame = CGRectMake(buttonStart + buttonSize + gap, buttonY, buttonSize, buttonSize);
+        self.nextButton.frame = CGRectMake(buttonStart + (buttonSize + gap) * 2.0, buttonY, buttonSize, buttonSize);
         self.previousButton.hidden = NO;
         self.playPauseButton.hidden = NO;
         self.nextButton.hidden = NO;
 
         if (PGNowPlaying.sharedInstance.canSeek) {
-            CGFloat sliderY = 165.0 * verticalScale;
+            CGFloat sliderY = height - 21.0 * scale;
             CGFloat sliderH = 15.0 * scale;
             CGFloat sliderInset = PGFrameInset(sliderY, sliderY + sliderH, height, radius);
-            CGFloat sliderX = contentInset + 5.0 * scale;
-            CGFloat sliderW = MAX(40.0, width - sliderX - sliderInset - 5.0 * scale);
+            CGFloat sliderX = contentInset;
+            CGFloat sliderW = MAX(40.0, width - sliderX - sliderInset);
             self.progressSlider.frame = CGRectMake(sliderX, sliderY, sliderW, sliderH);
-            self.elapsedLabel.frame = CGRectMake(sliderX, sliderY + 13.0 * scale, 46.0 * scale, 15.0 * scale);
-            self.durationLabel.frame = CGRectMake(sliderX, sliderY + 13.0 * scale, sliderW, 15.0 * scale);
+            self.elapsedLabel.frame = CGRectMake(sliderX, sliderY + 12.0 * scale, 42.0 * scale, 12.0 * scale);
+            self.durationLabel.frame = CGRectMake(sliderX, sliderY + 12.0 * scale, sliderW, 12.0 * scale);
             self.elapsedLabel.font = [self configuredFontWithSize:8.0 weight:UIFontWeightRegular];
             self.durationLabel.font = [self configuredFontWithSize:8.0 weight:UIFontWeightRegular];
             self.elapsedLabel.hidden = NO;
@@ -629,6 +670,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
             self.elapsedLabel.hidden = YES;
             self.durationLabel.hidden = YES;
         }
+        [self bringSubviewToFront:self.closeButton];
+        [self bringSubviewToFront:self.dismissButton];
         return;
     }
 
@@ -637,9 +680,17 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     CGFloat statusHeight = 27.0 * scale;
     CGFloat closeSize = 25.0 * scale;
     CGFloat radius = [self pgEffectiveCornerRadius];
-    // 左右留白按状态行纵向区间让出圆角，否则首个数字与关闭按钮的外角会被弧线裁掉
+    // Reserve independent space for the chevron and unmistakable × dismiss button.
     CGFloat sidePad = pad + PGFrameInset(top, top + statusHeight, height, radius);
-    self.closeButton.frame = CGRectMake(MAX(sidePad, width - sidePad - closeSize), top, closeSize, closeSize);
+    self.dismissButton.hidden = NO;
+    CGFloat dismissSize = MIN(34.0 * scale, MAX(26.0, height - top - 4.0 * scale));
+    self.dismissButton.frame = CGRectMake(MAX(sidePad, width - sidePad - dismissSize), top,
+                                          dismissSize, dismissSize);
+    self.dismissButton.layer.cornerRadius = dismissSize * 0.30;
+    self.dismissButton.hidden = NO;
+    CGFloat chevronRight = CGRectGetMinX(self.dismissButton.frame) - 4.0 * scale;
+    self.closeButton.frame = CGRectMake(MAX(sidePad, chevronRight - closeSize), top, closeSize, closeSize);
+    self.closeButton.hidden = NO;
     CGFloat rightEdge = CGRectGetMinX(self.closeButton.frame) - 5.0 * scale;
     CGFloat statusWidth = MAX(0.0, rightEdge - sidePad);
 
@@ -704,6 +755,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.titleLabel.hidden = NO;
     self.artistLabel.hidden = NO;
     self.lyricsLabel.hidden = NO;
+    [self bringSubviewToFront:self.closeButton];
+    [self bringSubviewToFront:self.dismissButton];
 }
 
 #pragma mark - Content updates

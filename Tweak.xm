@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <math.h>
 #import "PGGrabberOverlayView.h"
 #import "PGNowPlaying.h"
 #import "PerfectGrabberPreferences.h"
@@ -96,6 +97,42 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 }
 @end
 
+/// Keep the overlay window in the same orientation as the game scene. A plain
+/// root controller in an auxiliary SpringBoard UIWindow can otherwise stay in
+/// portrait while the app underneath rotates to landscape.
+@interface PGOverlayRootController : UIViewController
+@property (nonatomic, weak) UIWindowScene *targetScene;
+@end
+@implementation PGOverlayRootController
+- (BOOL)shouldAutorotate { return YES; }
+- (UIInterfaceOrientation)pgCurrentInterfaceOrientation {
+    // SpringBoard's auxiliary scene can report portrait while a foreground
+    // landscape app is visible. Prefer system interface orientation when it
+    // has a valid value, then fall back to the target scene.
+    UIInterfaceOrientation statusOrientation = UIApplication.sharedApplication.statusBarOrientation;
+    if (statusOrientation != UIInterfaceOrientationUnknown) return statusOrientation;
+    UIInterfaceOrientation sceneOrientation = self.targetScene.interfaceOrientation;
+    if (sceneOrientation != UIInterfaceOrientationUnknown) return sceneOrientation;
+    UIDeviceOrientation device = UIDevice.currentDevice.orientation;
+    if (device == UIDeviceOrientationLandscapeLeft) return UIInterfaceOrientationLandscapeRight;
+    if (device == UIDeviceOrientationLandscapeRight) return UIInterfaceOrientationLandscapeLeft;
+    if (device == UIDeviceOrientationPortraitUpsideDown) return UIInterfaceOrientationPortraitUpsideDown;
+    return UIInterfaceOrientationPortrait;
+}
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    switch ([self pgCurrentInterfaceOrientation]) {
+        case UIInterfaceOrientationPortrait: return UIInterfaceOrientationMaskPortrait;
+        case UIInterfaceOrientationPortraitUpsideDown: return UIInterfaceOrientationMaskPortraitUpsideDown;
+        case UIInterfaceOrientationLandscapeLeft: return UIInterfaceOrientationMaskLandscapeLeft;
+        case UIInterfaceOrientationLandscapeRight: return UIInterfaceOrientationMaskLandscapeRight;
+        default: return UIInterfaceOrientationMaskAllButUpsideDown;
+    }
+}
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+    return [self pgCurrentInterfaceOrientation];
+}
+@end
+
 #pragma mark - 卡片宿主与常显覆盖窗口
 
 @interface PGNativeCardHost : NSObject
@@ -123,6 +160,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 + (instancetype)shared;
 - (void)presentFromHost:(UIView *)host chevron:(UIView *)chevron grabber:(id)grabber;
 - (void)keepAfterPanelDismiss;
+- (void)dockCardAfterPanelDismiss;
 - (void)resizeForHeight:(CGFloat)height;
 - (void)longPressChanged:(BOOL)active;
 - (void)refresh;
@@ -140,10 +178,37 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     return instance;
 }
 
+- (instancetype)init {
+    if ((self = [super init])) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(orientationDidChange:)
+                                                     name:UIDeviceOrientationDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(orientationDidChange:)
+                                                     name:UIApplicationDidChangeStatusBarOrientationNotification
+                                                   object:nil];
+    }
+    return self;
+}
+
+- (void)orientationDidChange:(NSNotification *)notification {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        PGOverlayRootController *root = (PGOverlayRootController *)self.overlayWindow.rootViewController;
+        if (@available(iOS 16.0, *)) [root setNeedsUpdateOfSupportedInterfaceOrientations];
+        [root.view setNeedsLayout];
+        [root.view layoutIfNeeded];
+        self.container.frame = root.view.bounds;
+        [self applyLayoutAnimated:NO];
+    });
+}
+
 #pragma mark 窗口与几何
 
 - (CGFloat)preferredWidth {
     CGFloat width = MAX(300.0, PerfectGrabberPreferences.sharedPreferences.cardWidth);
+    BOOL landscape = self.overlayWindow && CGRectGetWidth(self.overlayWindow.bounds) > CGRectGetHeight(self.overlayWindow.bounds) * 1.15;
+    if (landscape && !self.card.isExpanded) return MIN(width, 340.0);
     return self.card.isExpanded ? width : MIN(440.0, width);
 }
 
@@ -154,7 +219,8 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     overlay.windowLevel = UIWindowLevelAlert + 1.0;
     overlay.backgroundColor = UIColor.clearColor;
     overlay.opaque = NO;
-    UIViewController *root = [UIViewController new];
+    PGOverlayRootController *root = [PGOverlayRootController new];
+    root.targetScene = scene;
     root.view.backgroundColor = UIColor.clearColor;
     overlay.rootViewController = root;
     overlay.hidden = NO;
@@ -329,14 +395,24 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (CGRect)frameInPanel:(CGFloat)height {
     UIView *canvas = self.panelParent;
     if (!canvas) return CGRectZero;
-    CGFloat width = MIN(MAX(260.0, self.preferredWidth), MAX(260.0, CGRectGetWidth(canvas.bounds) - 12.0));
-    CGPoint anchor = [self.panelWindow convertPoint:CGPointMake(self.anchorScreenX, self.anchorScreenY) toWindow:canvas.window];
-    CGFloat xAnchor = anchor.x > 0.0 ? anchor.x : CGRectGetWidth(canvas.bounds) * 0.5;
-    CGFloat left = MAX(4.0, MIN(xAnchor - width * 0.5, CGRectGetWidth(canvas.bounds) - width - 4.0));
-    // In landscape the Dynamic Island can overlay the SpringBoard card header.
-    // Leave a clear gap below the native capsule so the temperature column isn't masked.
-    CGFloat top = MAX(58.0, anchor.y + 10.0);
-    CGFloat h = MIN(height, MAX(1.0, CGRectGetHeight(canvas.bounds) - top - 4.0));
+    CGFloat canvasWidth = CGRectGetWidth(canvas.bounds);
+    CGFloat canvasHeight = CGRectGetHeight(canvas.bounds);
+    BOOL landscape = canvasWidth > canvasHeight * 1.15;
+    CGFloat width = MIN(MAX(260.0, self.preferredWidth), MAX(260.0, canvasWidth - 12.0));
+    CGPoint anchor = CGPointMake(canvasWidth * 0.5, 0.0);
+    UIWindow *targetWindow = canvas.window;
+    if (self.panelWindow && targetWindow) {
+        CGPoint panelPoint = CGPointMake(self.anchorScreenX, self.anchorScreenY);
+        anchor = [self.panelWindow convertPoint:panelPoint toWindow:targetWindow];
+    }
+    CGFloat xAnchor = (isfinite(anchor.x) && anchor.x >= 0.0) ? anchor.x : canvasWidth * 0.5;
+    CGFloat left = landscape ? (canvasWidth - width) * 0.5
+                             : MAX(6.0, MIN(xAnchor - width * 0.5, canvasWidth - width - 6.0));
+    // Center the slim landscape capsule above the playfield while retaining a
+    // clear Dynamic-Island gap. Portrait keeps its edge-grabber anchor behavior.
+    CGFloat top = landscape ? 58.0 : MAX(58.0, anchor.y + 10.0);
+    CGFloat maxHeight = MAX(1.0, canvasHeight - top - 10.0);
+    CGFloat h = MIN(height, maxHeight);
     return CGRectMake(left, top, width, h);
 }
 
@@ -381,10 +457,14 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     else block();
     if (self.isOverlayActive && self.overlayWindow) {
         CGPoint anchor = [self.panelWindow convertPoint:CGPointMake(self.anchorScreenX, self.anchorScreenY) toWindow:self.overlayWindow];
-        CGFloat width = MIN(frame.size.width, CGRectGetWidth(self.overlayWindow.bounds) - 8.0);
-        CGFloat x = MAX(4.0, MIN(anchor.x - width * 0.5, CGRectGetWidth(self.overlayWindow.bounds) - width - 4.0));
-        CGFloat overlayY = MAX(58.0, anchor.y + 10.0);
-        CGRect overlayFrame = CGRectMake(x, overlayY, width, frame.size.height);
+        CGFloat overlayWidth = CGRectGetWidth(self.overlayWindow.bounds);
+        CGFloat overlayHeight = CGRectGetHeight(self.overlayWindow.bounds);
+        BOOL landscape = overlayWidth > overlayHeight * 1.15;
+        CGFloat width = MIN(frame.size.width, overlayWidth - 16.0);
+        CGFloat x = MAX(8.0, MIN(anchor.x - width * 0.5, overlayWidth - width - 8.0));
+        CGFloat overlayY = landscape ? 58.0 : MAX(58.0, anchor.y + 10.0);
+        CGFloat maxHeight = MAX(44.0, overlayHeight - overlayY - 12.0);
+        CGRect overlayFrame = CGRectMake(x, overlayY, width, MIN(frame.size.height, maxHeight));
         self.card.frame = overlayFrame;
         [self.card setNeedsLayout];
         [self.card layoutIfNeeded];
@@ -397,9 +477,14 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:^{ self.card.frame = frame; [self.card setNeedsLayout]; [self.card layoutIfNeeded]; } completion:nil];
     if (self.isOverlayActive && self.overlayWindow) {
         CGPoint anchor = [self.panelWindow convertPoint:CGPointMake(self.anchorScreenX, self.anchorScreenY) toWindow:self.overlayWindow];
-        CGFloat width = MIN(frame.size.width, CGRectGetWidth(self.overlayWindow.bounds) - 8.0);
-        CGFloat x = MAX(4.0, MIN(anchor.x - width * 0.5, CGRectGetWidth(self.overlayWindow.bounds) - width - 4.0));
-        self.card.frame = CGRectMake(x, MAX(anchor.y + 2.0, 4.0), width, height);
+        CGFloat overlayWidth = CGRectGetWidth(self.overlayWindow.bounds);
+        CGFloat overlayHeight = CGRectGetHeight(self.overlayWindow.bounds);
+        BOOL landscape = overlayWidth > overlayHeight * 1.15;
+        CGFloat width = MIN(frame.size.width, overlayWidth - 16.0);
+        CGFloat x = MAX(8.0, MIN(anchor.x - width * 0.5, overlayWidth - width - 8.0));
+        CGFloat y = landscape ? 12.0 : MAX(anchor.y + 2.0, 8.0);
+        CGFloat safeHeight = MAX(44.0, overlayHeight - y - 12.0);
+        self.card.frame = CGRectMake(x, y, width, MIN(height, safeHeight));
         [self.card setNeedsLayout];
         [self.card layoutIfNeeded];
     }
