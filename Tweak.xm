@@ -106,6 +106,10 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 @property (nonatomic, weak) UIWindow *panelWindow;
 @property (nonatomic, weak) UIView *panelParent;
 @property (nonatomic, weak) UIView *originalHost;
+@property (nonatomic, weak) id grabber;
+@property (nonatomic, weak) UIView *chevron;
+@property (nonatomic, assign) BOOL chevronWasHidden;
+@property (nonatomic, assign) BOOL hasChevronState;
 @property (nonatomic, weak) UIView *nativeBackdrop;
 @property (nonatomic, assign) BOOL nativeBackdropWasHidden;
 @property (nonatomic, assign) BOOL hasNativeBackdropState;
@@ -433,7 +437,10 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         self.nativeBackdropWasHidden = nativeBackdrop.hidden;
         self.hasNativeBackdropState = YES;
     }
-    // Keep the gesture-bearing grabber visible and clear only its rendered capsule layers.
+    // Hide only the decorative capsule backdrop (not its recognizer-bearing host)
+    // so the blue pill cannot show through the transparent card.
+    nativeBackdrop.hidden = YES;
+    // Keep the gesture-bearing grabber visible and clear its rendered capsule layers.
     if (chevron && self.panelParent) {
         CGRect rect = [chevron convertRect:chevron.bounds toView:self.panelParent];
         CGFloat canvasWidth = MAX(CGRectGetWidth(self.panelParent.bounds), 1.0);
