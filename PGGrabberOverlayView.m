@@ -127,7 +127,9 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     _cardHeightScale = PGClamp(preferences.cardHeightScale, 0.70, 1.60);
     _fontWeight = PGClamp(preferences.fontWeight, 0.0, 1.0);
     _longPressControls = preferences.longPressControls;
-    _expanded = !_longPressControls; // 默认收起；可选长按展开。
+    UIDeviceOrientation initialOrientation = UIDevice.currentDevice.orientation;
+    BOOL initialLandscape = UIDeviceOrientationIsLandscape(initialOrientation);
+    _expanded = initialLandscape || !_longPressControls; // 横屏默认完整播放器；箭头可收起。
     _lyricsLookupEnabled = preferences.lyricsLookupEnabled;
     _lyricsCache = [NSMutableDictionary dictionary];
     _seekHaptics = [UISelectionFeedbackGenerator new];
@@ -289,8 +291,10 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     if (image) [button setImage:image forState:UIControlStateNormal];
     else [button setTitle:fallback forState:UIControlStateNormal];
     button.tintColor = UIColor.whiteColor;
-    button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.13];
+    button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.16];
     button.layer.cornerRadius = 12.0;
+    button.layer.borderWidth = 0.5;
+    button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.22].CGColor;
     button.accessibilityLabel = accessibility;
     button.hidden = YES;
     return button;
@@ -414,10 +418,18 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 - (CGFloat)heightForWidth:(CGFloat)width {
     CGFloat scale = PGClamp(self.cardScale, 0.65, 1.60);
     if (self.compactMode && self.isExpanded) {
-        // Landscape media controls use a single horizontal content row plus
-        // seek bar; no tall portrait-style stack over the game.
-        CGFloat vertical = PGClamp(self.cardHeightScale, 0.70, 1.20);
-        return PGClamp(104.0 * vertical * scale, 92.0 * scale, 128.0 * scale);
+        CGFloat vertical = PGClamp(self.cardHeightScale, 0.70, 1.25);
+        CGRect hostBounds = self.window.bounds;
+        if (CGRectGetWidth(hostBounds) <= 0.0 && self.superview) hostBounds = self.superview.bounds;
+        BOOL landscape = CGRectGetWidth(hostBounds) > CGRectGetHeight(hostBounds) * 1.15 ||
+                         UIDeviceOrientationIsLandscape(UIDevice.currentDevice.orientation);
+        if (landscape) {
+            // Match the reference's broad center card while preserving room for
+            // cover art, song text, seek bar and transport controls.
+            return PGClamp(220.0 * vertical * scale, 196.0 * scale, 238.0 * scale);
+        }
+        CGFloat controlContentHeight = (193.0 * vertical + 24.0) * scale;
+        return MAX(220.0 * vertical * scale, controlContentHeight);
     }
     CGFloat height = self.compactMode ? 44.0 : (112.0 + (self.isExpanded ? 64.0 * self.cardHeightScale : 0.0));
     return MAX(44.0, height * scale);
@@ -461,7 +473,11 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     }
     // 直角时不要再留发丝描边，否则四条边会各多出一条 1px 亮线。
     self.layer.borderWidth = radius > 0.5 ? (1.0 / MAX(UIScreen.mainScreen.scale, 1.0)) : 0.0;
-    self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.22].CGColor;
+    self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.30].CGColor;
+    self.layer.shadowColor = [UIColor blackColor].CGColor;
+    self.layer.shadowOpacity = 0.24;
+    self.layer.shadowRadius = 18.0 * PGClamp(self.cardScale, 0.65, 1.60);
+    self.layer.shadowOffset = CGSizeMake(0.0, 8.0 * PGClamp(self.cardScale, 0.65, 1.60));
 }
 
 #pragma mark - Appearance and layout
@@ -497,8 +513,8 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     self.gaussianBlurBackdrop.hidden = mode != 2;
     self.gaussianBlurBackdrop.backgroundColor = [UIColor colorWithWhite:0.70 alpha:0.18 + blur * 0.48];
     // Keep one predictable dark tint; only the opacity slider controls its strength.
-    self.tintView.backgroundColor = [UIColor colorWithWhite:0.0
-                                                      alpha:PGClamp(self.backgroundOpacity, 0.0, 1.0)];
+    CGFloat glassOpacity = PGClamp(0.20 + self.backgroundOpacity * 0.68, 0.30, 0.84);
+    self.tintView.backgroundColor = [UIColor colorWithRed:0.025 green:0.045 blue:0.075 alpha:glassOpacity];
     self.blurView.hidden = NO;
     [self pgApplyCornerRadius];
     self.timeLabel.textColor = textColor;
@@ -550,7 +566,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         CGFloat radius = [self pgEffectiveCornerRadius];
         CGFloat basePad = 6.0 * scale;
         CGFloat close = 18.0 * scale;
-        CGFloat dismiss = 20.0 * scale;
+        CGFloat dismiss = 24.0 * scale;
         CGFloat row = 17.0 * scale;
         // 状态行贴着上边，是圆角吃得最狠的一行。必须按整行（顶边到底边）算内缩，
         // 只按中心高度算会让顶边伸进弧线，时间首位数字被切掉。
