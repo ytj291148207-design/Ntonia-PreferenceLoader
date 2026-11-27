@@ -485,7 +485,6 @@ static NSString *PGFormatMediaTime(double seconds) {
     }
 
     if (self.compactMode) {
-        CGFloat radius = [self pgEffectiveCornerRadius];
         CGFloat pad = 9.0 * scale, row = 17.0 * scale, close = 20.0 * scale;
         CGFloat statusY = 3.0 * scale;
         CGFloat statusWidth = MAX(0.0, width - 2.0 * (pad + close));
