@@ -102,14 +102,21 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 /// portrait while the app underneath rotates to landscape.
 @interface PGOverlayRootController : UIViewController
 @property (nonatomic, weak) UIWindowScene *targetScene;
+@property (nonatomic, weak) UIWindow *targetHostWindow;
 @end
 @implementation PGOverlayRootController
 - (BOOL)shouldAutorotate { return YES; }
 - (UIInterfaceOrientation)pgCurrentInterfaceOrientation {
-    // Use the app/grabber scene's interface direction first; the physical
-    // device may be held portrait while a game forces a landscape interface.
-    UIInterfaceOrientation sceneOrientation = self.targetScene.interfaceOrientation;
-    if (sceneOrientation != UIInterfaceOrientationUnknown) return sceneOrientation;
+    // Use the exact scene that owns SpringBoard's original grabber window;
+    // using the auxiliary overlay's own scene left the card in portrait.
+    UIInterfaceOrientation hostOrientation = self.targetHostWindow.windowScene.interfaceOrientation;
+    if (hostOrientation != UIInterfaceOrientationUnknown) return hostOrientation;
+    CGSize host = self.targetHostWindow.bounds.size;
+    if (host.width > host.height * 1.05) return UIInterfaceOrientationLandscapeLeft;
+    if (host.height > host.width * 1.05) return UIInterfaceOrientationPortrait;
+    CGSize screen = UIScreen.mainScreen.coordinateSpace.bounds.size;
+    if (screen.width > screen.height * 1.05) return UIInterfaceOrientationLandscapeLeft;
+    if (screen.height > screen.width * 1.05) return UIInterfaceOrientationPortrait;
     UIDeviceOrientation device = UIDevice.currentDevice.orientation;
     if (device == UIDeviceOrientationLandscapeLeft) return UIInterfaceOrientationLandscapeRight;
     if (device == UIDeviceOrientationLandscapeRight) return UIInterfaceOrientationLandscapeLeft;
@@ -167,6 +174,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (void)restoreNativeVisuals;
 - (void)updateOrientationVisibility;
 - (BOOL)isLandscapeForWindow:(UIWindow *)window;
+- (void)setCardFrame:(CGRect)frame inHost:(UIView *)host;
 @end
 
 @implementation PGNativeCardHost
@@ -203,13 +211,16 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 #pragma mark 窗口与几何
 
 - (void)updateOrientationVisibility {
-    // Do not gate presentation on orientation: SpringBoard can report a stale
-    // portrait orientation while the game is landscape, which previously hid
-    // the card immediately after the grabber haptic. Orientation now selects
-    // the centered layout only; a deliberate grab always keeps its card visible.
+    // Use the live physical orientation before the auxiliary scene, which can
+    // remain stale during the game-to-home handoff.
     UIWindow *window = self.panelWindow ?: self.overlayWindow;
     if (!self.card || !self.container || !window) return;
     self.isLandscapeVisible = [self isLandscapeForWindow:window];
+    if (!self.isLandscapeVisible) {
+        self.card.hidden = YES;
+        self.container.hidden = YES;
+        return;
+    }
     self.card.hidden = NO;
     self.container.hidden = NO;
     if (self.overlayWindow) {
@@ -224,18 +235,42 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 }
 
 - (BOOL)isLandscapeForWindow:(UIWindow *)window {
-    if (!window) return NO;
-    // Prefer the actual window's rotated bounds. In SpringBoard this often
-    // reflects an app-forced landscape earlier/more reliably than its scene.
-    CGFloat width = CGRectGetWidth(window.bounds);
-    CGFloat height = CGRectGetHeight(window.bounds);
+    // Live screen geometry distinguishes the portrait home screen from a
+    // landscape game even when the phone is held sideways or scenes are stale.
+    CGSize screen = UIScreen.mainScreen.coordinateSpace.bounds.size;
+    if (screen.width > screen.height * 1.05) return YES;
+    if (screen.height > screen.width * 1.05) return NO;
+    UIInterfaceOrientation hostOrientation = window.windowScene.interfaceOrientation;
+    if (hostOrientation != UIInterfaceOrientationUnknown) return UIInterfaceOrientationIsLandscape(hostOrientation);
+    CGFloat width = CGRectGetWidth(window.bounds), height = CGRectGetHeight(window.bounds);
     if (width > height * 1.05) return YES;
     if (height > width * 1.05) return NO;
-
-    UIInterfaceOrientation orientation = window.windowScene.interfaceOrientation;
-    if (orientation != UIInterfaceOrientationUnknown) return UIInterfaceOrientationIsLandscape(orientation);
     UIDeviceOrientation device = UIDevice.currentDevice.orientation;
-    return device == UIDeviceOrientationLandscapeLeft || device == UIDeviceOrientationLandscapeRight;
+    return UIDeviceOrientationIsLandscape(device);
+}
+
+- (BOOL)needsCardCounterRotationInHost:(UIView *)host {
+    if (!host) return NO;
+    CGSize bounds = host.bounds.size;
+    BOOL hostIsPortrait = bounds.height > bounds.width * 1.15;
+    BOOL displayIsLandscape = [self isLandscapeForWindow:self.panelWindow ?: self.overlayWindow];
+    return displayIsLandscape && hostIsPortrait;
+}
+
+- (void)setCardFrame:(CGRect)frame inHost:(UIView *)host {
+    if (![self needsCardCounterRotationInHost:host]) {
+        self.card.transform = CGAffineTransformIdentity;
+        self.card.frame = frame;
+        return;
+    }
+
+    // The screenshot shows a landscape host whose auxiliary view still uses
+    // portrait axes. Counter-rotate the card itself; its local layout stays
+    // horizontal while the transformed bounding box remains centered.
+    self.card.transform = CGAffineTransformIdentity;
+    self.card.bounds = CGRectMake(0.0, 0.0, frame.size.width, frame.size.height);
+    self.card.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+    self.card.transform = CGAffineTransformMakeRotation((CGFloat)-M_PI_2);
 }
 
 - (CGFloat)preferredWidth {
@@ -245,15 +280,21 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     return self.card.isExpanded ? width : MIN(440.0, width);
 }
 
-- (UIWindow *)overlayWindowForScene:(UIWindowScene *)scene {
+- (UIWindow *)overlayWindowForScene:(UIWindowScene *)scene hostWindow:(UIWindow *)hostWindow {
     if (!scene) return nil;
-    if (self.overlayWindow && self.overlayWindow.windowScene == scene) return self.overlayWindow;
+    if (self.overlayWindow && self.overlayWindow.windowScene == scene) {
+        PGOverlayRootController *existingRoot = (PGOverlayRootController *)self.overlayWindow.rootViewController;
+        existingRoot.targetHostWindow = hostWindow;
+        existingRoot.targetScene = scene;
+        return self.overlayWindow;
+    }
     PGOverlayWindow *overlay = [[PGOverlayWindow alloc] initWithWindowScene:scene];
     overlay.windowLevel = UIWindowLevelAlert + 1.0;
     overlay.backgroundColor = UIColor.clearColor;
     overlay.opaque = NO;
     PGOverlayRootController *root = [PGOverlayRootController new];
     root.targetScene = scene;
+    root.targetHostWindow = hostWindow;
     root.view.backgroundColor = UIColor.clearColor;
     overlay.rootViewController = root;
     overlay.hidden = NO;
@@ -263,7 +304,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 
 - (UIView *)panelCanvasForHost:(UIView *)host {
     UIWindowScene *scene = host.window.windowScene;
-    UIWindow *overlay = [self overlayWindowForScene:scene];
+    UIWindow *overlay = [self overlayWindowForScene:scene hostWindow:host.window];
     return overlay.rootViewController.view ?: host.window.rootViewController.view ?: host.superview ?: host;
 }
 
@@ -486,7 +527,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (void)applyLayoutAnimated:(BOOL)animated {
     if (!self.card || !self.panelParent) return;
     CGRect frame = [self frameInPanel:[self.card heightForWidth:self.preferredWidth]];
-    void (^block)(void) = ^{ self.card.frame = frame; [self.card setNeedsLayout]; [self.card layoutIfNeeded]; };
+    void (^block)(void) = ^{ [self setCardFrame:frame inHost:self.panelParent]; [self.card setNeedsLayout]; [self.card layoutIfNeeded]; };
     if (animated) [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:block completion:nil];
     else block();
     if (self.isOverlayActive && self.overlayWindow) {
@@ -501,7 +542,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         CGFloat y = landscape ? (overlayHeight - cardHeight) * 0.5
                               : MAX(58.0, anchor.y + 10.0);
         CGRect overlayFrame = CGRectMake(x, y, width, cardHeight);
-        self.card.frame = overlayFrame;
+        [self setCardFrame:overlayFrame inHost:self.overlayWindow.rootViewController.view];
         [self.card setNeedsLayout];
         [self.card layoutIfNeeded];
     }
@@ -510,7 +551,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (void)resizeForHeight:(CGFloat)height {
     if (!self.card || !self.panelParent) return;
     CGRect frame = [self frameInPanel:height];
-    [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:^{ self.card.frame = frame; [self.card setNeedsLayout]; [self.card layoutIfNeeded]; } completion:nil];
+    [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut animations:^{ [self setCardFrame:frame inHost:self.panelParent]; [self.card setNeedsLayout]; [self.card layoutIfNeeded]; } completion:nil];
     if (self.isOverlayActive && self.overlayWindow) {
         CGPoint anchor = [self.panelWindow convertPoint:CGPointMake(self.anchorScreenX, self.anchorScreenY) toWindow:self.overlayWindow];
         CGFloat overlayWidth = CGRectGetWidth(self.overlayWindow.bounds);
@@ -522,7 +563,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
                               : MAX(8.0, MIN(anchor.x - width * 0.5, overlayWidth - width - 8.0));
         CGFloat y = landscape ? (overlayHeight - cardHeight) * 0.5
                               : MAX(anchor.y + 2.0, 8.0);
-        self.card.frame = CGRectMake(x, y, width, cardHeight);
+        [self setCardFrame:CGRectMake(x, y, width, cardHeight) inHost:self.overlayWindow.rootViewController.view];
         [self.card setNeedsLayout];
         [self.card layoutIfNeeded];
     }
@@ -609,6 +650,13 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (void)keepAfterPanelDismiss {
     if (!self.card || !self.container || !self.overlayWindow || self.isOverlayActive) return;
     [self updateOrientationVisibility];
+    if (!self.isLandscapeVisible) {
+        // Keep the card model alive so it can reappear in the next landscape
+        // session, but never migrate its auxiliary window onto the portrait home screen.
+        self.container.hidden = YES;
+        self.card.hidden = YES;
+        return;
+    }
     if (self.nativeBackdrop) [self suppressNativeVisualsInView:self.nativeBackdrop root:YES];
     self.isOverlayActive = YES;
     self.panelParent = self.overlayWindow.rootViewController.view;
