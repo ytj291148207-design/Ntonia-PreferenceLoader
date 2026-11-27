@@ -203,32 +203,39 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 #pragma mark 窗口与几何
 
 - (void)updateOrientationVisibility {
-    UIWindow *window = self.overlayWindow ?: self.panelWindow;
-    if (!self.card || !window) return;
-    BOOL landscape = [self isLandscapeForWindow:window];
-    self.isLandscapeVisible = landscape;
-    if (!landscape) {
-        self.card.hidden = YES;
-        self.container.hidden = YES;
-        return;
-    }
-    self.overlayWindow.hidden = NO;
-    self.container.hidden = NO;
+    // Do not gate presentation on orientation: SpringBoard can report a stale
+    // portrait orientation while the game is landscape, which previously hid
+    // the card immediately after the grabber haptic. Orientation now selects
+    // the centered layout only; a deliberate grab always keeps its card visible.
+    UIWindow *window = self.panelWindow ?: self.overlayWindow;
+    if (!self.card || !self.container || !window) return;
+    self.isLandscapeVisible = [self isLandscapeForWindow:window];
     self.card.hidden = NO;
-    [self.overlayWindow bringSubviewToFront:self.container];
-    self.container.frame = self.overlayWindow.rootViewController.view.bounds;
+    self.container.hidden = NO;
+    if (self.overlayWindow) {
+        self.overlayWindow.hidden = NO;
+        self.overlayWindow.cardContainer = self.container;
+    }
+    if (self.panelParent) {
+        self.container.frame = self.panelParent.bounds;
+        [self.panelParent bringSubviewToFront:self.container];
+    }
     [self applyLayoutAnimated:NO];
 }
 
 - (BOOL)isLandscapeForWindow:(UIWindow *)window {
     if (!window) return NO;
-    // The attached UI scene reports app-forced landscape even when the phone's
-    // physical orientation or cached SpringBoard bounds lag behind.
+    // Prefer the actual window's rotated bounds. In SpringBoard this often
+    // reflects an app-forced landscape earlier/more reliably than its scene.
+    CGFloat width = CGRectGetWidth(window.bounds);
+    CGFloat height = CGRectGetHeight(window.bounds);
+    if (width > height * 1.05) return YES;
+    if (height > width * 1.05) return NO;
+
     UIInterfaceOrientation orientation = window.windowScene.interfaceOrientation;
     if (orientation != UIInterfaceOrientationUnknown) return UIInterfaceOrientationIsLandscape(orientation);
-    if (window.bounds.size.width > window.bounds.size.height * 1.15) return YES;
-    if (window.bounds.size.height > window.bounds.size.width * 1.15) return NO;
-    return UIDeviceOrientationIsLandscape(UIDevice.currentDevice.orientation);
+    UIDeviceOrientation device = UIDevice.currentDevice.orientation;
+    return device == UIDeviceOrientationLandscapeLeft || device == UIDeviceOrientationLandscapeRight;
 }
 
 - (CGFloat)preferredWidth {
@@ -602,7 +609,6 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (void)keepAfterPanelDismiss {
     if (!self.card || !self.container || !self.overlayWindow || self.isOverlayActive) return;
     [self updateOrientationVisibility];
-    if(!self.isLandscapeVisible){self.container.hidden=YES;return;}
     if (self.nativeBackdrop) [self suppressNativeVisualsInView:self.nativeBackdrop root:YES];
     self.isOverlayActive = YES;
     self.panelParent = self.overlayWindow.rootViewController.view;
