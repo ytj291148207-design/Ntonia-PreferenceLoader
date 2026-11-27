@@ -27,6 +27,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// Called when the close button is tapped.
 @property (nonatomic, copy, nullable) void (^onClose)(void);
 @property (nonatomic, copy, nullable) void (^onLongPressStateChange)(BOOL active);
+@property (nonatomic, strong, readonly) UILongPressGestureRecognizer *cardLongPressRecognizer;
+@property (nonatomic, strong, readonly) UITapGestureRecognizer *interactionShieldRecognizer;
 @property (nonatomic, assign) BOOL compactMode;
 @property (nonatomic, assign) BOOL deferNativeGrabberDismissal;
 @property (nonatomic, readonly, getter=isExpanded) BOOL expanded;

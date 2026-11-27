@@ -1,3 +1,12 @@
+# 1.1-65 capsule gesture and orientation revision
+
+- Add a no-op tap shield. Parent SpringBoard tap recognizers wait for the shield/long-press so tapping card content does not collapse the panel; Control Center swipe/pan recognizers are untouched.
+- Keep one card view; when the panel dismisses, move that same card into this scene's MainDisplay overlay window (no duplicate card view). X remains the explicit close.
+- Show in landscape, hide in portrait, restore in landscape. iOS has no public universal game-category test; per user choice visibility follows orientation.
+- Inherited X/settings/lyrics controls from 1.1-63. Static source compile passed; not device-tested.
+
+---
+
 # 1.1-63 修复：方向、关闭按钮、进度条实时性
 
 本版只改 `GrabberCardRootHide/GrabberCard`（RootHide 打包用的那套实现），顶层 `Tweak.xm` 旧实现未动。

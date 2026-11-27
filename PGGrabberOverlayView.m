@@ -56,6 +56,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 @property (nonatomic, strong) UIButton *playPauseButton;
 @property (nonatomic, strong) UIButton *nextButton;
 @property (nonatomic, strong) UILongPressGestureRecognizer *cardLongPress;
+@property (nonatomic, strong, readwrite) UITapGestureRecognizer *interactionShieldRecognizer;
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, copy) NSData *displayedArtworkData;
 @property (nonatomic, copy) NSString *currentLyricKey;
@@ -259,6 +260,13 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     _cardLongPress.cancelsTouchesInView = NO;
     _cardLongPress.delegate = self;
     [self addGestureRecognizer:_cardLongPress];
+    self.interactionShieldRecognizer=[[UITapGestureRecognizer alloc]initWithTarget:self action:@selector(ignoreInteractionShieldTap:)];
+    self.interactionShieldRecognizer.cancelsTouchesInView=NO;
+    self.interactionShieldRecognizer.delaysTouchesBegan=NO;
+    self.interactionShieldRecognizer.delaysTouchesEnded=NO;
+    self.interactionShieldRecognizer.delegate=self;
+    [self addGestureRecognizer:self.interactionShieldRecognizer];
+    [self.interactionShieldRecognizer requireGestureRecognizerToFail:_cardLongPress];
 
     [self refreshAppearance];
     [self updateContents];
@@ -332,6 +340,9 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 }
 
 - (BOOL)isExpanded { return _expanded; }
+- (UILongPressGestureRecognizer *)cardLongPressRecognizer { return _cardLongPress; }
+- (UITapGestureRecognizer *)interactionShieldRecognizer { return _interactionShieldRecognizer; }
+- (void)ignoreInteractionShieldTap:(UITapGestureRecognizer *)recognizer { /* deliberate no-op */ }
 - (CGFloat)cardHeightScale { return _cardHeightScale; }
 - (void)setCardHeightScale:(CGFloat)value {
     CGFloat next = PGClamp(value, 0.70, 1.60);
@@ -1007,11 +1018,12 @@ static NSString *PGTimedLyricAtTime(NSString *lrc, double seconds) {
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    if(gestureRecognizer==self.interactionShieldRecognizer||otherGestureRecognizer==self.interactionShieldRecognizer)return YES;
     return NO;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
     UIView *v=touch.view;
-    while(v&&v!=self){if([v isKindOfClass:UIControl.class])return NO;v=v.superview;}
+    while(v&&v!=self){if([v isKindOfClass:UIControl.class])return gestureRecognizer==self.interactionShieldRecognizer;v=v.superview;}
     return YES;
 }
 

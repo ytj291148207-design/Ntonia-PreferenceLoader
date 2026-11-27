@@ -154,6 +154,8 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 @property (nonatomic, assign) BOOL isOverlayActive;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *nativeVisualStates;
 @property (nonatomic, assign) BOOL presented;
+@property (nonatomic, strong) NSTimer *orientationVisibilityTimer;
+@property (nonatomic, assign) BOOL isLandscapeVisible;
 + (instancetype)shared;
 - (void)presentFromHost:(UIView *)host chevron:(UIView *)chevron grabber:(id)grabber;
 - (void)keepAfterPanelDismiss;
@@ -163,6 +165,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (void)hide;
 - (void)suppressNativeVisualsInView:(UIView *)view root:(BOOL)isRoot;
 - (void)restoreNativeVisuals;
+- (void)updateOrientationVisibility;
 @end
 
 @implementation PGNativeCardHost
@@ -196,6 +199,25 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 }
 
 #pragma mark 窗口与几何
+
+- (void)updateOrientationVisibility {
+    UIWindow *window=self.overlayWindow ?: self.panelWindow;
+    if(!self.card||!window)return;
+    UIWindowScene *scene=window.windowScene;
+    UIInterfaceOrientation orientation=scene?scene.interfaceOrientation:UIInterfaceOrientationUnknown;
+    BOOL landscape=orientation!=UIInterfaceOrientationUnknown?UIInterfaceOrientationIsLandscape(orientation):window.bounds.size.width>window.bounds.size.height*1.05;
+    self.isLandscapeVisible=landscape;
+    if(!landscape){
+        self.card.hidden=YES;
+        if(self.container)self.container.hidden=YES;
+        return;
+    }
+    if(self.container){
+        self.overlayWindow.hidden=NO;self.container.hidden=NO;self.card.hidden=NO;
+        [self.overlayWindow bringSubviewToFront:self.container];
+        [self applyLayoutAnimated:NO];
+    }
+}
 
 - (CGFloat)preferredWidth {
     CGFloat width = MAX(300.0, PerfectGrabberPreferences.sharedPreferences.cardWidth);
@@ -530,8 +552,20 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         }
     }
     [self attachToWindow:window];
+    // Parent tongue tap must wait for the no-op shield and hold recognizer;
+    // do not interfere with Control Center's pan-to-dismiss recognizers.
+    for(UIView *view=host;view&&view!=window;view=view.superview){
+        for(UIGestureRecognizer *r in [view.gestureRecognizers copy]){
+            if(r==self.card.interactionShieldRecognizer||r==self.card.cardLongPressRecognizer||![r isKindOfClass:UITapGestureRecognizer.class])continue;
+            @try{[r requireGestureRecognizerToFail:self.card.interactionShieldRecognizer];[r requireGestureRecognizerToFail:self.card.cardLongPressRecognizer];}@catch(__unused NSException *e){}
+        }
+    }
     if (chevron) chevron.hidden = YES;
     self.presented = YES;
+    [self.orientationVisibilityTimer invalidate];
+    self.orientationVisibilityTimer=[NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(updateOrientationVisibility) userInfo:nil repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:self.orientationVisibilityTimer forMode:NSRunLoopCommonModes];
+    [self updateOrientationVisibility];
 
     [self refresh];
     [self.card startUpdating];
@@ -545,6 +579,8 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 /// 这也是“常显/不会自己缩回”的关键：仅设置控件和用户手动箭头改变展开态。
 - (void)keepAfterPanelDismiss {
     if (!self.card || !self.container || !self.overlayWindow || self.isOverlayActive) return;
+    [self updateOrientationVisibility];
+    if(!self.isLandscapeVisible){self.container.hidden=YES;return;}
     if (self.nativeBackdrop) [self suppressNativeVisualsInView:self.nativeBackdrop root:YES];
     self.isOverlayActive = YES;
     self.panelParent = self.overlayWindow.rootViewController.view;
@@ -586,6 +622,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 }
 
 - (void)hide {
+    [self.orientationVisibilityTimer invalidate];self.orientationVisibilityTimer=nil;self.isLandscapeVisible=NO;
     if (self.overlayWindow) {
         self.overlayWindow.cardContainer = nil;
         self.overlayWindow.hidden = YES;
