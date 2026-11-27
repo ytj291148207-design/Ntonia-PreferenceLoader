@@ -16,7 +16,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat preferredHeight;
 @property (nonatomic, assign) NSInteger controlsDisplayMode;
 @property (nonatomic, assign) BOOL collapsedByUser;
-@property (nonatomic, assign) BOOL collapsedByUser;
 @property (nonatomic, copy, nullable) void (^onCollapseToggle)(BOOL collapsed);
 /// 圆角策略：0 统一 / 1 收起强制胶囊 / 2 全部半高 / 3 小圆角。半径始终会被夹到不超过半高。
 @property (nonatomic, assign) NSInteger cornerStyle;
