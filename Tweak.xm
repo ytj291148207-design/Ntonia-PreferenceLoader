@@ -249,23 +249,31 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     return UIDeviceOrientationIsLandscape(device);
 }
 
-- (BOOL)needsCardCounterRotationInHost:(UIView *)host {
-    if (!host) return NO;
-    CGSize hostBounds = host.bounds.size;
-    BOOL hostCoordinatesArePortrait = hostBounds.height > hostBounds.width * 1.15;
-    BOOL displayIsLandscape = [self isLandscapeForWindow:self.panelWindow ?: self.overlayWindow];
-    return displayIsLandscape && hostCoordinatesArePortrait;
-}
-
 - (void)setCardFrame:(CGRect)frame inHost:(UIView *)host {
+    UIWindow *hostWindow = host.window ?: self.overlayWindow ?: self.panelWindow;
+    CGSize screen = hostWindow.screen.coordinateSpace.bounds.size;
+    CGSize hostBounds = host.bounds.size;
+    BOOL displayLandscape = screen.width > screen.height * 1.05;
+    BOOL hostPortrait = hostBounds.height > hostBounds.width * 1.15;
+    if (displayLandscape && hostPortrait && hostWindow) {
+        CGFloat cardWidth = MIN(frame.size.width, screen.width - 16.0);
+        CGFloat cardHeight = MIN(frame.size.height, screen.height - 16.0);
+        CGRect screenFrame = CGRectMake((screen.width - cardWidth) * 0.5, 8.0, cardWidth, cardHeight);
+        CGRect windowFrame = [hostWindow convertRect:screenFrame fromWindow:nil];
+        CGRect localFrame = [host convertRect:windowFrame fromView:hostWindow];
+        CGPoint w0 = [hostWindow convertPoint:CGPointZero fromWindow:nil];
+        CGPoint wx = [hostWindow convertPoint:CGPointMake(1.0, 0.0) fromWindow:nil];
+        CGPoint v0 = [host convertPoint:w0 fromView:hostWindow];
+        CGPoint vx = [host convertPoint:wx fromView:hostWindow];
+        CGFloat angle = atan2(vx.y - v0.y, vx.x - v0.x);
+        self.card.transform = CGAffineTransformIdentity;
+        self.card.bounds = CGRectMake(0.0, 0.0, cardWidth, cardHeight);
+        self.card.center = CGPointMake(CGRectGetMidX(localFrame), CGRectGetMidY(localFrame));
+        self.card.transform = CGAffineTransformMakeRotation(angle);
+        return;
+    }
     self.card.transform = CGAffineTransformIdentity;
     self.card.frame = frame;
-    if ([self needsCardCounterRotationInHost:host]) {
-        // The host is still portrait while the display/game is landscape.
-        // A clockwise quarter-turn cancels the host's counter-clockwise screen
-        // presentation; the resulting visual bounds remain landscape and centered.
-        self.card.transform = CGAffineTransformMakeRotation((CGFloat)M_PI_2);
-    }
 }
 
 - (CGFloat)preferredWidth {
@@ -480,8 +488,10 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     CGFloat top = MAX(58.0, anchor.y + 10.0);
     CGFloat h = MIN(height, MAX(1.0, canvasHeight - top - 10.0));
     if (landscape) {
-        h = MIN(height, MAX(1.0, canvasHeight - 24.0));
-        top = (canvasHeight - h) * 0.5;
+        // Reference placement: centered horizontally and pinned just under the
+        // landscape screen's safe-area top, rather than vertically centered.
+        top = MAX(12.0, canvas.safeAreaInsets.top + 8.0);
+        h = MIN(height, MAX(1.0, canvasHeight - top - 12.0));
     }
     return CGRectMake(left, top, width, h);
 }
@@ -531,11 +541,11 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         CGFloat overlayHeight = CGRectGetHeight(self.overlayWindow.bounds);
         BOOL landscape = [self isLandscapeForWindow:self.overlayWindow];
         CGFloat width = MIN(frame.size.width, MAX(1.0, overlayWidth - 16.0));
-        CGFloat cardHeight = MIN(frame.size.height, MAX(1.0, overlayHeight - 24.0));
+        CGFloat safeTop = self.overlayWindow.safeAreaInsets.top;
+        CGFloat y = landscape ? MAX(12.0, safeTop + 8.0) : MAX(58.0, anchor.y + 10.0);
+        CGFloat cardHeight = MIN(frame.size.height, MAX(1.0, overlayHeight - y - 12.0));
         CGFloat x = landscape ? (overlayWidth - width) * 0.5
                               : MAX(8.0, MIN(anchor.x - width * 0.5, overlayWidth - width - 8.0));
-        CGFloat y = landscape ? (overlayHeight - cardHeight) * 0.5
-                              : MAX(58.0, anchor.y + 10.0);
         CGRect overlayFrame = CGRectMake(x, y, width, cardHeight);
         [self setCardFrame:overlayFrame inHost:self.overlayWindow.rootViewController.view];
         [self.card setNeedsLayout];
@@ -553,11 +563,11 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         CGFloat overlayHeight = CGRectGetHeight(self.overlayWindow.bounds);
         BOOL landscape = [self isLandscapeForWindow:self.overlayWindow];
         CGFloat width = MIN(frame.size.width, MAX(1.0, overlayWidth - 16.0));
-        CGFloat cardHeight = MIN(height, MAX(1.0, overlayHeight - 24.0));
+        CGFloat y = landscape ? MAX(12.0, self.overlayWindow.safeAreaInsets.top + 8.0)
+                              : MAX(anchor.y + 2.0, 8.0);
+        CGFloat cardHeight = MIN(height, MAX(1.0, overlayHeight - y - 12.0));
         CGFloat x = landscape ? (overlayWidth - width) * 0.5
                               : MAX(8.0, MIN(anchor.x - width * 0.5, overlayWidth - width - 8.0));
-        CGFloat y = landscape ? (overlayHeight - cardHeight) * 0.5
-                              : MAX(anchor.y + 2.0, 8.0);
         [self setCardFrame:CGRectMake(x, y, width, cardHeight) inHost:self.overlayWindow.rootViewController.view];
         [self.card setNeedsLayout];
         [self.card layoutIfNeeded];

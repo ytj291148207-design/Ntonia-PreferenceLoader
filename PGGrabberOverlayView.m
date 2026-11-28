@@ -75,6 +75,7 @@ static NSAttributedString *PGStatusItem(NSString *symbol, NSString *fallback, NS
 @property (nonatomic, strong) UILongPressGestureRecognizer *cardLongPress;
 @property (nonatomic, strong, readwrite) UITapGestureRecognizer *interactionShieldRecognizer;
 @property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, strong) NSTimer *progressTimer;
 @property (nonatomic, copy) NSData *displayedArtworkData;
 @property (nonatomic, copy) NSString *currentLyricKey;
 @property (nonatomic, copy) NSString *currentLyrics;
@@ -103,21 +104,6 @@ static NSAttributedString *PGStatusItem(NSString *symbol, NSString *fallback, NS
 
 @implementation PGGrabberOverlayView
 
-// Ensure the explicit × dismiss target wins over the long-press recognizer and
-// remains easy to hit even when compact mode scales the visible glyph down.
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    if (!self.hidden && self.userInteractionEnabled && !self.dismissButton.hidden) {
-        // Keep the neighboring chevron's own hit area intact; expand only the
-        // remaining margin around the visible × dismissal control.
-        if (!self.closeButton.hidden && CGRectContainsPoint(self.closeButton.frame, point)) {
-            return [super hitTest:point withEvent:event];
-        }
-        CGRect dismissHit = CGRectInset(self.dismissButton.frame, -6.0, -6.0);
-        if (CGRectContainsPoint(dismissHit, point)) return self.dismissButton;
-    }
-    return [super hitTest:point withEvent:event];
-}
-
 @synthesize cardScale = _cardScale;
 @synthesize blurAmount = _blurAmount;
 @synthesize backgroundOpacity = _backgroundOpacity;
@@ -143,8 +129,8 @@ static NSAttributedString *PGStatusItem(NSString *symbol, NSString *fallback, NS
     _cornerStyle = MAX(0, MIN(3, preferences.cornerStyle));
     _cardHeightScale = PGClamp(preferences.cardHeightScale, 0.70, 1.60);
     _fontWeight = PGClamp(preferences.fontWeight, 0.0, 1.0);
-    _longPressControls = preferences.longPressControls;
-    _expanded = !_longPressControls; // 默认两行信息，长按后展开媒体控制。
+    _longPressControls = YES;
+    _expanded = NO; // 固定两行默认；长按负责展开/收回媒体控制。
     _lyricsLookupEnabled = preferences.lyricsLookupEnabled;
     _lyricsCache = [NSMutableDictionary dictionary];
     _seekHaptics = [UISelectionFeedbackGenerator new];
@@ -379,13 +365,11 @@ static NSAttributedString *PGStatusItem(NSString *symbol, NSString *fallback, NS
     [self refreshAppearance];
     [self setNeedsLayout];
 }
-- (BOOL)longPressControls { return _longPressControls; }
+- (BOOL)longPressControls { return YES; }
 - (void)setLongPressControls:(BOOL)value {
-    if (_longPressControls == value) return;
-    _longPressControls = value;
-    // Setter runs only when the stored option actually changes. Turning off
-    // long-press expands controls by default; turning it on returns to compact.
-    [self setExpanded:!value animated:YES];
+    // This card's interaction is intentionally fixed by design: compact by
+    // default, long-press to toggle, with no arrow or close affordance.
+    _longPressControls = YES;
 }
 - (BOOL)lyricsLookupEnabled { return _lyricsLookupEnabled; }
 - (void)setLyricsLookupEnabled:(BOOL)value {
@@ -984,15 +968,16 @@ static NSString *PGTimedLyricAtTime(NSString *lrc, double seconds) {
 }
 
 - (void)handleCardLongPress:(UILongPressGestureRecognizer *)recognizer {
-    if (!self.longPressControls) return;
     if (recognizer.state == UIGestureRecognizerStateBegan) {
         if (self.vibrationFeedbackEnabled) {
             UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
             [generator prepare];
             [generator impactOccurred];
         }
-        if (!self.isExpanded) [self setExpanded:YES animated:YES];
-        if (self.onLongPressStateChange) self.onLongPressStateChange(YES);
+        // Long-press toggles between the two-row card and the expanded player;
+        // this keeps it retractable without adding an arrow or close button.
+        [self setExpanded:!self.isExpanded animated:YES];
+        if (self.onLongPressStateChange) self.onLongPressStateChange(self.isExpanded);
     } else if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled || recognizer.state == UIGestureRecognizerStateFailed) {
         // Keep the expanded card visible after the user's long press ends.
         // The arrow button is the explicit collapse control.
@@ -1045,17 +1030,31 @@ static NSString *PGTimedLyricAtTime(NSString *lrc, double seconds) {
 
 #pragma mark - Monitoring
 
+- (void)refreshProgressOnly {
+    if (!self.isExpanded || self.isSeeking) return;
+    PGNowPlaying *nowPlaying = PGNowPlaying.sharedInstance;
+    if (nowPlaying.duration <= 0.0) return;
+    double elapsed = MIN(nowPlaying.duration, MAX(0.0, nowPlaying.elapsed));
+    self.progressSlider.value = (float)(elapsed / nowPlaying.duration);
+    self.elapsedLabel.text = [self formattedTime:elapsed];
+    self.durationLabel.text = [self formattedTime:nowPlaying.duration];
+}
+
 - (void)startUpdating {
     [self stopUpdating];
     [PGNowPlaying.sharedInstance startMonitoring];
     [self refreshAppearance];
     [self updateContents];
     self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateContents) userInfo:nil repeats:YES];
+    self.progressTimer = [NSTimer timerWithTimeInterval:0.1 target:self selector:@selector(refreshProgressOnly) userInfo:nil repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:self.progressTimer forMode:NSRunLoopCommonModes];
 }
 
 - (void)stopUpdating {
     [self.timer invalidate];
     self.timer = nil;
+    [self.progressTimer invalidate];
+    self.progressTimer = nil;
     self.lyricsRequestGeneration += 1;
     [self.lyricsTask cancel];
     self.lyricsTask = nil;

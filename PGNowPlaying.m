@@ -2,6 +2,7 @@
 #import <dlfcn.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <QuartzCore/QuartzCore.h>
 
 /// 日志统一由插件入口提供。
 extern void PGDebugLog(NSString *format, ...);
@@ -106,6 +107,8 @@ static NSString *PGBundleIdentifierForPID(int pid) {
 @property (nonatomic, copy, nullable) NSString *bundleIdentifier;
 @property (nonatomic, copy, nullable) NSString *frontmostBundleIdentifier;
 @property (nonatomic, assign) double elapsed;
+@property (nonatomic, assign) double elapsedAnchor;
+@property (nonatomic, assign) NSTimeInterval elapsedSampleTime;
 @property (nonatomic, assign) double duration;
 @property (nonatomic, copy, nullable) NSData *artworkData;
 @property (nonatomic, copy) NSString *signature;
@@ -126,6 +129,13 @@ static NSString *PGBundleIdentifierForPID(int pid) {
 @end
 
 @implementation PGNowPlaying
+
+- (double)elapsed {
+    if (!self.monitoring || !self.isPlaying || self.elapsedSampleTime <= 0.0) return _elapsed;
+    double rate = self.lastRate > 0.01 ? self.lastRate : 1.0;
+    double value = self.elapsedAnchor + MAX(0.0, CACurrentMediaTime() - self.elapsedSampleTime) * rate;
+    return self.duration > 0.0 ? MIN(self.duration, value) : MAX(0.0, value);
+}
 
 + (instancetype)sharedInstance {
     static PGNowPlaying *instance;
@@ -288,7 +298,8 @@ static NSString *PGBundleIdentifierForPID(int pid) {
         self.ratePositive = NO;
         self.elapsedAdvancing = NO;
         self.hasElapsedSample = NO;
-        self.elapsed = 0.0;
+        self.elapsedAnchor = 0.0;
+        self.elapsedSampleTime = CACurrentMediaTime();
         self.duration = 0.0;
         self.artworkData = nil;
         [self recomputePlaying];
@@ -335,10 +346,14 @@ static NSString *PGBundleIdentifierForPID(int pid) {
         }
         self.lastElapsed = value;
         self.elapsed = value;
+        self.elapsedAnchor = value;
+        self.elapsedSampleTime = CACurrentMediaTime();
     } else {
         self.elapsedAdvancing = NO;
         self.hasElapsedSample = NO;
         self.elapsed = 0.0;
+        self.elapsedAnchor = 0.0;
+        self.elapsedSampleTime = CACurrentMediaTime();
     }
 
     // 进度条要用的总时长与封面。这两个不进签名（否则每秒都在回调），
