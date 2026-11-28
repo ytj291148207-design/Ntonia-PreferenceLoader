@@ -8,6 +8,11 @@
 #import "PGNowPlaying.h"
 #import "PerfectGrabberPreferences.h"
 
+@protocol PGScreenCoordinateSpaceCompat <NSObject>
+@property (nonatomic, readonly) CGRect bounds;
+- (CGPoint)convertPoint:(CGPoint)point toCoordinateSpace:(id)coordinateSpace;
+@end
+
 extern "C" void PGDebugLog(NSString *format, ...);
 static NSString *const PGLogPath = @"/var/mobile/Media/PerfectGrabber.log";
 static NSLock *PGLogLock;
@@ -112,8 +117,12 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     // clipped against a narrow edge strip in a landscape game.
     CGSize screen = UIScreen.mainScreen.coordinateSpace.bounds.size;
     if (screen.width > screen.height * 1.05) {
+        UIDeviceOrientation device = UIDevice.currentDevice.orientation;
         UIInterfaceOrientation hostOrientation = self.targetHostWindow.windowScene.interfaceOrientation;
+        if (device == UIDeviceOrientationLandscapeLeft) return UIInterfaceOrientationLandscapeRight;
+        if (device == UIDeviceOrientationLandscapeRight) return UIInterfaceOrientationLandscapeLeft;
         if (hostOrientation == UIInterfaceOrientationLandscapeLeft || hostOrientation == UIInterfaceOrientationLandscapeRight) return hostOrientation;
+        if (hostOrientation == UIInterfaceOrientationPortrait) return UIInterfaceOrientationLandscapeRight;
         return UIInterfaceOrientationLandscapeLeft;
     }
     if (screen.height > screen.width * 1.05) {
@@ -254,38 +263,17 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 }
 
 - (void)setCardFrame:(CGRect)frame inHost:(UIView *)host {
-    UIWindow *hostWindow = host.window ?: self.overlayWindow ?: self.panelWindow;
-    if (!hostWindow || !host) { self.card.transform = CGAffineTransformIdentity; self.card.frame = frame; return; }
-    id screenSpace = hostWindow.screen.coordinateSpace;
-    CGSize screen = screenSpace.bounds.size;
-    CGSize hostBounds = host.bounds.size;
-    BOOL displayLandscape = screen.width > screen.height * 1.05;
-    BOOL hostPortrait = hostBounds.height > hostBounds.width * 1.15;
-    if (displayLandscape && hostPortrait) {
-        CGFloat cardWidth = MIN(frame.size.width, screen.width - 24.0);
-        CGFloat cardHeight = MIN(frame.size.height, screen.height - 24.0);
-        CGFloat top = 10.0;
-        CGPoint screenCenter = CGPointMake(screen.width * 0.5, top + cardHeight * 0.5);
-        CGPoint screenX = CGPointMake(screenCenter.x + 1.0, screenCenter.y);
-        CGPoint windowCenter = [screenSpace convertPoint:screenCenter toCoordinateSpace:hostWindow];
-        CGPoint windowX = [screenSpace convertPoint:screenX toCoordinateSpace:hostWindow];
-        CGPoint localCenter = [host convertPoint:windowCenter fromView:hostWindow];
-        CGPoint localX = [host convertPoint:windowX fromView:hostWindow];
-        CGFloat angle = atan2(localX.y - localCenter.y, localX.x - localCenter.x);
-        self.card.transform = CGAffineTransformIdentity;
-        self.card.bounds = CGRectMake(0.0, 0.0, cardWidth, cardHeight);
-        self.card.center = localCenter;
-        self.card.transform = CGAffineTransformMakeRotation(angle);
-        return;
-    }
+    // The overlay root follows the grabber's UIWindowScene. Keep layout in that
+    // scene's local coordinates; a second screen-space rotation caused the card
+    // to jump into the display corner and clip against its rounded bounds.
     self.card.transform = CGAffineTransformIdentity;
     self.card.frame = frame;
 }
 
 - (CGFloat)preferredWidth {
     CGFloat width = MAX(300.0, PerfectGrabberPreferences.sharedPreferences.cardWidth);
-    BOOL landscape = [self isLandscapeForWindow:self.overlayWindow ?: self.panelWindow];
-    if (landscape) return MIN(width, self.card.isExpanded ? 420.0 : 340.0);
+    BOOL landscape = [self isLandscapeForWindow:self.panelWindow ?: self.overlayWindow];
+    if (landscape) return MIN(width, self.card.isExpanded ? 460.0 : 380.0);
     return self.card.isExpanded ? width : MIN(440.0, width);
 }
 
@@ -481,7 +469,9 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     CGFloat canvasWidth = CGRectGetWidth(canvas.bounds);
     CGFloat canvasHeight = CGRectGetHeight(canvas.bounds);
     BOOL landscape = [self isLandscapeForWindow:canvas.window ?: self.panelWindow];
-    CGFloat width = MIN(MAX(260.0, self.preferredWidth), MAX(260.0, canvasWidth - 12.0));
+    CGFloat landscapeWidth = UIScreen.mainScreen.coordinateSpace.bounds.size.width;
+    CGFloat availableWidth = (landscape && landscapeWidth > canvasWidth) ? landscapeWidth - 24.0 : canvasWidth - 12.0;
+    CGFloat width = MIN(MAX(260.0, self.preferredWidth), MAX(260.0, availableWidth));
     CGPoint anchor = CGPointMake(canvasWidth * 0.5, 0.0);
     UIWindow *targetWindow = canvas.window;
     if (self.panelWindow && targetWindow) {
