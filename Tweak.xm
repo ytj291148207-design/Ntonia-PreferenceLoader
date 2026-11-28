@@ -107,16 +107,20 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 @implementation PGOverlayRootController
 - (BOOL)shouldAutorotate { return YES; }
 - (UIInterfaceOrientation)pgCurrentInterfaceOrientation {
-    // Use the exact scene that owns SpringBoard's original grabber window;
-    // using the auxiliary overlay's own scene left the card in portrait.
+    // The overlay must use the active display's oriented coordinate space. Its
+    // helper scene/host window can remain portrait and leave card children
+    // clipped against a narrow edge strip in a landscape game.
+    CGSize screen = UIScreen.mainScreen.coordinateSpace.bounds.size;
+    if (screen.width > screen.height * 1.05) {
+        UIInterfaceOrientation hostOrientation = self.targetHostWindow.windowScene.interfaceOrientation;
+        if (hostOrientation == UIInterfaceOrientationLandscapeLeft || hostOrientation == UIInterfaceOrientationLandscapeRight) return hostOrientation;
+        return UIInterfaceOrientationLandscapeLeft;
+    }
+    if (screen.height > screen.width * 1.05) {
+        return UIDevice.currentDevice.orientation == UIDeviceOrientationPortraitUpsideDown ? UIInterfaceOrientationPortraitUpsideDown : UIInterfaceOrientationPortrait;
+    }
     UIInterfaceOrientation hostOrientation = self.targetHostWindow.windowScene.interfaceOrientation;
     if (hostOrientation != UIInterfaceOrientationUnknown) return hostOrientation;
-    CGSize host = self.targetHostWindow.bounds.size;
-    if (host.width > host.height * 1.05) return UIInterfaceOrientationLandscapeLeft;
-    if (host.height > host.width * 1.05) return UIInterfaceOrientationPortrait;
-    CGSize screen = UIScreen.mainScreen.coordinateSpace.bounds.size;
-    if (screen.width > screen.height * 1.05) return UIInterfaceOrientationLandscapeLeft;
-    if (screen.height > screen.width * 1.05) return UIInterfaceOrientationPortrait;
     UIDeviceOrientation device = UIDevice.currentDevice.orientation;
     if (device == UIDeviceOrientationLandscapeLeft) return UIInterfaceOrientationLandscapeRight;
     if (device == UIDeviceOrientationLandscapeRight) return UIInterfaceOrientationLandscapeLeft;
@@ -251,24 +255,26 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 
 - (void)setCardFrame:(CGRect)frame inHost:(UIView *)host {
     UIWindow *hostWindow = host.window ?: self.overlayWindow ?: self.panelWindow;
-    CGSize screen = hostWindow.screen.coordinateSpace.bounds.size;
+    if (!hostWindow || !host) { self.card.transform = CGAffineTransformIdentity; self.card.frame = frame; return; }
+    UICoordinateSpace *screenSpace = hostWindow.screen.coordinateSpace;
+    CGSize screen = screenSpace.bounds.size;
     CGSize hostBounds = host.bounds.size;
     BOOL displayLandscape = screen.width > screen.height * 1.05;
     BOOL hostPortrait = hostBounds.height > hostBounds.width * 1.15;
-    if (displayLandscape && hostPortrait && hostWindow) {
-        CGFloat cardWidth = MIN(frame.size.width, screen.width - 16.0);
-        CGFloat cardHeight = MIN(frame.size.height, screen.height - 16.0);
-        CGRect screenFrame = CGRectMake((screen.width - cardWidth) * 0.5, 8.0, cardWidth, cardHeight);
-        CGRect windowFrame = [hostWindow convertRect:screenFrame fromWindow:nil];
-        CGRect localFrame = [host convertRect:windowFrame fromView:hostWindow];
-        CGPoint w0 = [hostWindow convertPoint:CGPointZero fromWindow:nil];
-        CGPoint wx = [hostWindow convertPoint:CGPointMake(1.0, 0.0) fromWindow:nil];
-        CGPoint v0 = [host convertPoint:w0 fromView:hostWindow];
-        CGPoint vx = [host convertPoint:wx fromView:hostWindow];
-        CGFloat angle = atan2(vx.y - v0.y, vx.x - v0.x);
+    if (displayLandscape && hostPortrait) {
+        CGFloat cardWidth = MIN(frame.size.width, screen.width - 24.0);
+        CGFloat cardHeight = MIN(frame.size.height, screen.height - 24.0);
+        CGFloat top = 10.0;
+        CGPoint screenCenter = CGPointMake(screen.width * 0.5, top + cardHeight * 0.5);
+        CGPoint screenX = CGPointMake(screenCenter.x + 1.0, screenCenter.y);
+        CGPoint windowCenter = [screenSpace convertPoint:screenCenter toCoordinateSpace:hostWindow];
+        CGPoint windowX = [screenSpace convertPoint:screenX toCoordinateSpace:hostWindow];
+        CGPoint localCenter = [host convertPoint:windowCenter fromView:hostWindow];
+        CGPoint localX = [host convertPoint:windowX fromView:hostWindow];
+        CGFloat angle = atan2(localX.y - localCenter.y, localX.x - localCenter.x);
         self.card.transform = CGAffineTransformIdentity;
         self.card.bounds = CGRectMake(0.0, 0.0, cardWidth, cardHeight);
-        self.card.center = CGPointMake(CGRectGetMidX(localFrame), CGRectGetMidY(localFrame));
+        self.card.center = localCenter;
         self.card.transform = CGAffineTransformMakeRotation(angle);
         return;
     }
