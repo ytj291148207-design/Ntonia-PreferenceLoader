@@ -8,11 +8,6 @@
 #import "PGNowPlaying.h"
 #import "PerfectGrabberPreferences.h"
 
-@protocol PGScreenCoordinateSpaceCompat <NSObject>
-@property (nonatomic, readonly) CGRect bounds;
-- (CGPoint)convertPoint:(CGPoint)point toCoordinateSpace:(id)coordinateSpace;
-@end
-
 extern "C" void PGDebugLog(NSString *format, ...);
 static NSString *const PGLogPath = @"/var/mobile/Media/PerfectGrabber.log";
 static NSLock *PGLogLock;
@@ -88,16 +83,39 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 }
 @end
 
-/// Higher-level overlay accepts only card hits. Every outside touch goes back
-/// to the game so gameplay input is never consumed by the tweak.
+@interface PGOutsideTapView : UIView
+@property (nonatomic, copy) void (^onOutsideTap)(void);
+@end
+@implementation PGOutsideTapView
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        self.backgroundColor = UIColor.clearColor;
+        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(outsideTapped)];
+        tap.cancelsTouchesInView = YES;
+        tap.delaysTouchesBegan = NO;
+        [self addGestureRecognizer:tap];
+    }
+    return self;
+}
+- (void)outsideTapped { if (self.onOutsideTap) self.onOutsideTap(); }
+@end
+
+/// Keep outside touches observable only while a card is shown.
 @interface PGOverlayWindow : UIWindow
 @property (nonatomic, weak) UIView *cardContainer;
+@property (nonatomic, weak) PGOutsideTapView *outsideTapView;
 @end
 @implementation PGOverlayWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = [super hitTest:point withEvent:event];
     UIView *container = self.cardContainer;
     for (UIView *view = hit; view; view = view.superview) if (view == container) return hit;
+    PGOutsideTapView *catcher = self.outsideTapView;
+    if (catcher && !catcher.hidden && catcher.userInteractionEnabled) {
+        CGPoint local = [catcher convertPoint:point fromView:self];
+        if ([catcher pointInside:local withEvent:event]) return catcher;
+    }
     return nil;
 }
 @end
@@ -156,6 +174,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 @property (nonatomic, strong) PGEdgeCardContainer *container;
 @property (nonatomic, strong) PGGrabberOverlayView *card;
 @property (nonatomic, strong) PGOverlayWindow *overlayWindow;
+@property (nonatomic, strong) PGOutsideTapView *outsideTapView;
 @property (nonatomic, weak) UIWindow *window;
 @property (nonatomic, weak) UIWindow *panelWindow;
 @property (nonatomic, weak) UIView *panelParent;
@@ -230,15 +249,18 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     if (!self.card || !self.container || !window) return;
     self.isLandscapeVisible = [self isLandscapeForWindow:window];
     if (!self.isLandscapeVisible) {
+        if (self.outsideTapView) self.outsideTapView.hidden = YES;
         self.card.hidden = YES;
         self.container.hidden = YES;
         return;
     }
     self.card.hidden = NO;
     self.container.hidden = NO;
+    if (self.outsideTapView) self.outsideTapView.hidden = !self.isOverlayActive;
     if (self.overlayWindow) {
         self.overlayWindow.hidden = NO;
         self.overlayWindow.cardContainer = self.container;
+        self.overlayWindow.outsideTapView = self.outsideTapView;
     }
     if (self.panelParent) {
         self.container.frame = self.panelParent.bounds;
@@ -263,9 +285,30 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 }
 
 - (void)setCardFrame:(CGRect)frame inHost:(UIView *)host {
-    // The overlay root follows the grabber's UIWindowScene. Keep layout in that
-    // scene's local coordinates; a second screen-space rotation caused the card
-    // to jump into the display corner and clip against its rounded bounds.
+    UIWindow *hostWindow = host.window ?: self.overlayWindow ?: self.panelWindow;
+    CGSize screen = UIScreen.mainScreen.coordinateSpace.bounds.size;
+    CGSize hostBounds = host.bounds.size;
+    BOOL landscape = screen.width > screen.height * 1.05;
+    BOOL stalePortraitHost = hostBounds.height > hostBounds.width * 1.15;
+    if (hostWindow && host && landscape && stalePortraitHost) {
+        // Use the window's public screen-coordinate conversion instead of a
+        // manually guessed rotation; this preserves the correct anchor and axes.
+        CGFloat cardWidth = MIN(frame.size.width, screen.width - 24.0);
+        CGFloat cardHeight = MIN(frame.size.height, screen.height - 24.0);
+        CGFloat top = MAX(12.0, hostWindow.safeAreaInsets.top + 8.0);
+        CGPoint screenCenter = CGPointMake(screen.width * 0.5, top + cardHeight * 0.5);
+        CGPoint screenX = CGPointMake(screenCenter.x + 1.0, screenCenter.y);
+        CGPoint windowCenter = [hostWindow convertPoint:screenCenter fromWindow:nil];
+        CGPoint windowX = [hostWindow convertPoint:screenX fromWindow:nil];
+        CGPoint localCenter = [host convertPoint:windowCenter fromView:hostWindow];
+        CGPoint localX = [host convertPoint:windowX fromView:hostWindow];
+        CGFloat angle = atan2(localX.y - localCenter.y, localX.x - localCenter.x);
+        self.card.transform = CGAffineTransformIdentity;
+        self.card.bounds = CGRectMake(0.0, 0.0, cardWidth, cardHeight);
+        self.card.center = localCenter;
+        self.card.transform = CGAffineTransformMakeRotation(angle);
+        return;
+    }
     self.card.transform = CGAffineTransformIdentity;
     self.card.frame = frame;
 }
@@ -273,7 +316,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (CGFloat)preferredWidth {
     CGFloat width = MAX(300.0, PerfectGrabberPreferences.sharedPreferences.cardWidth);
     BOOL landscape = [self isLandscapeForWindow:self.panelWindow ?: self.overlayWindow];
-    if (landscape) return MIN(width, self.card.isExpanded ? 460.0 : 380.0);
+    if (landscape) return MIN(width, self.card.isExpanded ? 400.0 : 380.0);
     return self.card.isExpanded ? width : MIN(440.0, width);
 }
 
@@ -293,6 +336,23 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     root.targetScene = scene;
     root.targetHostWindow = hostWindow;
     root.view.backgroundColor = UIColor.clearColor;
+    self.outsideTapView = [[PGOutsideTapView alloc] initWithFrame:root.view.bounds];
+    self.outsideTapView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    __weak typeof(self) weakManager = self;
+    self.outsideTapView.onOutsideTap = ^{
+        PGNativeCardHost *manager = weakManager;
+        PGGrabberOverlayView *card = manager.card;
+        if (!manager || !card) return;
+        CGAffineTransform target = CGAffineTransformScale(card.transform, 0.84, 0.84);
+        [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseIn animations:^{
+            card.alpha = 0.0;
+            card.transform = target;
+        } completion:^(BOOL finished) {
+            [manager hide];
+        }];
+    };
+    self.outsideTapView.hidden = YES;
+    [root.view addSubview:self.outsideTapView];
     overlay.rootViewController = root;
     overlay.hidden = NO;
     self.overlayWindow = overlay;
@@ -657,6 +717,8 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     self.isOverlayActive = YES;
     self.panelParent = self.overlayWindow.rootViewController.view;
     self.window = self.overlayWindow;
+    self.outsideTapView.hidden = NO;
+    self.overlayWindow.outsideTapView = self.outsideTapView;
     self.card.hidden = NO;
     self.container.hidden = NO;
     self.container.frame = self.panelParent.bounds;
