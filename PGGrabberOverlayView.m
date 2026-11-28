@@ -365,11 +365,11 @@ static NSAttributedString *PGStatusItem(NSString *symbol, NSString *fallback, NS
     [self refreshAppearance];
     [self setNeedsLayout];
 }
-- (BOOL)longPressControls { return YES; }
+- (BOOL)longPressControls { return _longPressControls; }
 - (void)setLongPressControls:(BOOL)value {
-    // This card's interaction is intentionally fixed by design: compact by
-    // default, long-press to toggle, with no arrow or close affordance.
+    // Preserve the backing ivar for ARC/Clang while keeping the fixed design enabled.
     _longPressControls = YES;
+    (void)value;
 }
 - (BOOL)lyricsLookupEnabled { return _lyricsLookupEnabled; }
 - (void)setLyricsLookupEnabled:(BOOL)value {
