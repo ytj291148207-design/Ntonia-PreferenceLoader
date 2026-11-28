@@ -256,7 +256,7 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 - (void)setCardFrame:(CGRect)frame inHost:(UIView *)host {
     UIWindow *hostWindow = host.window ?: self.overlayWindow ?: self.panelWindow;
     if (!hostWindow || !host) { self.card.transform = CGAffineTransformIdentity; self.card.frame = frame; return; }
-    UICoordinateSpace *screenSpace = hostWindow.screen.coordinateSpace;
+    id screenSpace = hostWindow.screen.coordinateSpace;
     CGSize screen = screenSpace.bounds.size;
     CGSize hostBounds = host.bounds.size;
     BOOL displayLandscape = screen.width > screen.height * 1.05;
