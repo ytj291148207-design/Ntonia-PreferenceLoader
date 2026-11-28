@@ -1,8 +1,8 @@
 Package: com.netskao.perfectgrabber
 Name: Ntonia-PreferenceLoader
-Version: 1.1-68
+Version: 1.1-69
 Architecture: iphoneos-arm64
-Description: RootHide 卡片方向与桌面残留修复测试版
+Description: RootHide 四行卡片信息与长按展开测试版
 Maintainer: Huayuarc
 Author: NetSkao
 Section: Tweaks

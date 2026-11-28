@@ -83,8 +83,8 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 }
 @end
 
-/// Higher-level SpringBoard window for the persistent game card. Only the card
-/// accepts touches; the rest of the game remains fully interactive.
+/// Higher-level overlay accepts only card hits. Every outside touch goes back
+/// to the game so gameplay input is never consumed by the tweak.
 @interface PGOverlayWindow : UIWindow
 @property (nonatomic, weak) UIView *cardContainer;
 @end
@@ -251,26 +251,21 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 
 - (BOOL)needsCardCounterRotationInHost:(UIView *)host {
     if (!host) return NO;
-    CGSize bounds = host.bounds.size;
-    BOOL hostIsPortrait = bounds.height > bounds.width * 1.15;
+    CGSize hostBounds = host.bounds.size;
+    BOOL hostCoordinatesArePortrait = hostBounds.height > hostBounds.width * 1.15;
     BOOL displayIsLandscape = [self isLandscapeForWindow:self.panelWindow ?: self.overlayWindow];
-    return displayIsLandscape && hostIsPortrait;
+    return displayIsLandscape && hostCoordinatesArePortrait;
 }
 
 - (void)setCardFrame:(CGRect)frame inHost:(UIView *)host {
-    if (![self needsCardCounterRotationInHost:host]) {
-        self.card.transform = CGAffineTransformIdentity;
-        self.card.frame = frame;
-        return;
-    }
-
-    // The screenshot shows a landscape host whose auxiliary view still uses
-    // portrait axes. Counter-rotate the card itself; its local layout stays
-    // horizontal while the transformed bounding box remains centered.
     self.card.transform = CGAffineTransformIdentity;
-    self.card.bounds = CGRectMake(0.0, 0.0, frame.size.width, frame.size.height);
-    self.card.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
-    self.card.transform = CGAffineTransformMakeRotation((CGFloat)-M_PI_2);
+    self.card.frame = frame;
+    if ([self needsCardCounterRotationInHost:host]) {
+        // The host is still portrait while the display/game is landscape.
+        // A clockwise quarter-turn cancels the host's counter-clockwise screen
+        // presentation; the resulting visual bounds remain landscape and centered.
+        self.card.transform = CGAffineTransformMakeRotation((CGFloat)M_PI_2);
+    }
 }
 
 - (CGFloat)preferredWidth {
@@ -617,11 +612,6 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         }
     }
     [self attachToWindow:window];
-    // The reference screenshot is the expanded landscape player. Start it in
-    // that state on first landscape presentation; the chevron can collapse it.
-    if ([self isLandscapeForWindow:window] && self.card.longPressControls && !self.card.isExpanded) {
-        [self.card setExpanded:YES animated:NO];
-    }
     // Parent tongue tap must wait for the no-op shield and hold recognizer;
     // do not interfere with Control Center's pan-to-dismiss recognizers.
     for(UIView *view=host;view&&view!=window;view=view.superview){

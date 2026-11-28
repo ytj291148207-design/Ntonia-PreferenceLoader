@@ -37,6 +37,23 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     return MIN(maximum, MAX(minimum, value));
 }
 
+static NSAttributedString *PGStatusItem(NSString *symbol, NSString *fallback, NSString *value) {
+    UIFont *font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
+    UIColor *color = UIColor.whiteColor;
+    NSMutableAttributedString *result = [NSMutableAttributedString new];
+    UIImage *image = [UIImage systemImageNamed:symbol];
+    if (image) {
+        NSTextAttachment *attachment = [NSTextAttachment new];
+        attachment.image = [image imageWithTintColor:color];
+        attachment.bounds = CGRectMake(0.0, -1.5, 11.0, 11.0);
+        [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:attachment]];
+    } else {
+        [result appendAttributedString:[[NSAttributedString alloc] initWithString:fallback attributes:@{NSFontAttributeName:font, NSForegroundColorAttributeName:color}]];
+    }
+    [result appendAttributedString:[[NSAttributedString alloc] initWithString:[@" " stringByAppendingString:value ?: @"—"] attributes:@{NSFontAttributeName:font, NSForegroundColorAttributeName:color}]];
+    return result;
+}
+
 @interface PGGrabberOverlayView () <UIGestureRecognizerDelegate>
 @property (nonatomic, strong) UIVisualEffectView *blurView;
 @property (nonatomic, strong) UIView *tintView;
@@ -127,9 +144,7 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
     _cardHeightScale = PGClamp(preferences.cardHeightScale, 0.70, 1.60);
     _fontWeight = PGClamp(preferences.fontWeight, 0.0, 1.0);
     _longPressControls = preferences.longPressControls;
-    UIDeviceOrientation initialOrientation = UIDevice.currentDevice.orientation;
-    BOOL initialLandscape = UIDeviceOrientationIsLandscape(initialOrientation);
-    _expanded = initialLandscape || !_longPressControls; // 横屏默认完整播放器；箭头可收起。
+    _expanded = !_longPressControls; // 默认两行信息，长按后展开媒体控制。
     _lyricsLookupEnabled = preferences.lyricsLookupEnabled;
     _lyricsCache = [NSMutableDictionary dictionary];
     _seekHaptics = [UISelectionFeedbackGenerator new];
@@ -421,18 +436,13 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
         CGFloat vertical = PGClamp(self.cardHeightScale, 0.70, 1.25);
         CGRect hostBounds = self.window.bounds;
         if (CGRectGetWidth(hostBounds) <= 0.0 && self.superview) hostBounds = self.superview.bounds;
-        BOOL landscape = CGRectGetWidth(hostBounds) > CGRectGetHeight(hostBounds) * 1.15 ||
-                         UIDeviceOrientationIsLandscape(UIDevice.currentDevice.orientation);
-        if (landscape) {
-            // Match the reference's broad center card while preserving room for
-            // cover art, song text, seek bar and transport controls.
-            return PGClamp(220.0 * vertical * scale, 196.0 * scale, 238.0 * scale);
-        }
+        BOOL landscape = CGRectGetWidth(hostBounds) > CGRectGetHeight(hostBounds) * 1.15;
+        if (landscape) return PGClamp(198.0 * vertical * scale, 182.0 * scale, 216.0 * scale);
         CGFloat controlContentHeight = (193.0 * vertical + 24.0) * scale;
         return MAX(220.0 * vertical * scale, controlContentHeight);
     }
-    CGFloat height = self.compactMode ? 44.0 : (112.0 + (self.isExpanded ? 64.0 * self.cardHeightScale : 0.0));
-    return MAX(44.0, height * scale);
+    CGFloat height = self.compactMode ? 94.0 : (112.0 + (self.isExpanded ? 64.0 * self.cardHeightScale : 0.0));
+    return MAX(72.0, height * scale);
 }
 
 - (CGFloat)heightForCurrentWidth {
@@ -564,141 +574,98 @@ static CGFloat PGClamp(CGFloat value, CGFloat minimum, CGFloat maximum) {
 
     if (self.compactMode) {
         CGFloat radius = [self pgEffectiveCornerRadius];
-        CGFloat basePad = 6.0 * scale;
-        CGFloat close = 18.0 * scale;
-        CGFloat dismiss = 24.0 * scale;
-        CGFloat row = 17.0 * scale;
-        // 状态行贴着上边，是圆角吃得最狠的一行。必须按整行（顶边到底边）算内缩，
-        // 只按中心高度算会让顶边伸进弧线，时间首位数字被切掉。
-        CGFloat statusY = 3.0 * scale;
-        CGFloat statusInset = basePad + PGFrameInset(statusY, statusY + row, height, radius);
-        CGFloat statusRight = MAX(0.0, width - statusInset - close - dismiss - 7.0 * scale);
-        CGFloat rowWidth = MAX(0.0, statusRight - statusInset);
-        // Keep metrics in one compact row. The previous center gap left a blank
-        // block beneath Dynamic Island, so reclaim it for the temperature field.
-        CGFloat timeWidth = rowWidth * 0.20;
-        CGFloat batteryWidth = rowWidth * 0.25;
-        CGFloat temperatureWidth = rowWidth * 0.26;
-        CGFloat cpuWidth = MAX(0.0, rowWidth - timeWidth - batteryWidth - temperatureWidth);
-        self.timeLabel.frame = CGRectMake(statusInset, statusY, timeWidth, row);
-        self.batteryLabel.frame = CGRectMake(statusInset + timeWidth, statusY, batteryWidth, row);
-        self.temperatureLabel.frame = CGRectMake(statusInset + timeWidth + batteryWidth, statusY, temperatureWidth, row);
-        self.cpuLabel.frame = CGRectMake(statusInset + timeWidth + batteryWidth + temperatureWidth, statusY, cpuWidth, row);
-        for (UILabel *label in @[_timeLabel, _batteryLabel, _temperatureLabel, _cpuLabel]) {
-            label.font = [self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];
-            label.adjustsFontSizeToFitWidth = YES;
-            label.minimumScaleFactor = 0.35;
+        CGFloat pad = 12.0 * scale;
+        CGFloat statusY = 8.0 * scale;
+        CGFloat statusH = 22.0 * scale;
+        CGFloat side = pad + PGFrameInset(statusY, statusY + statusH, height, radius);
+        CGFloat gap = 5.0 * scale;
+        CGFloat usable = MAX(0.0, width - side * 2.0);
+        CGFloat col = MAX(0.0, (usable - gap * 3.0) / 4.0);
+        NSArray<UILabel *> *status = @[_timeLabel, _batteryLabel, _temperatureLabel, _cpuLabel];
+        for (NSUInteger i = 0; i < status.count; i++) {
+            UILabel *label = status[i];
+            label.frame = CGRectMake(side + i * (col + gap), statusY, col, statusH);
             label.textAlignment = NSTextAlignmentCenter;
+            label.font = [self configuredFontWithSize:11.0 weight:UIFontWeightSemibold];
+            label.adjustsFontSizeToFitWidth = YES;
+            label.minimumScaleFactor = 0.72;
             label.hidden = NO;
         }
-        CGFloat closeInset = PGFrameInset(statusY, statusY + close, height, radius);
-        self.closeButton.frame = CGRectMake(width - closeInset - basePad - close - dismiss - 4.0 * scale,
-                                            statusY, close, close);
-        self.closeButton.hidden = NO;
-        UIImage *toggleImage = [UIImage systemImageNamed:(self.isExpanded ? @"chevron.up" : @"chevron.down")];
-        if (toggleImage) [self.closeButton setImage:toggleImage forState:UIControlStateNormal];
-        else [self.closeButton setTitle:(self.isExpanded ? @"⌃" : @"⌄") forState:UIControlStateNormal];
-        self.closeButton.accessibilityLabel = self.isExpanded ? @"收起卡片内容" : @"展开卡片内容";
-        self.dismissButton.frame = CGRectMake(width - closeInset - basePad - dismiss,
-                                              statusY - 1.5 * scale, dismiss, dismiss);
-        self.dismissButton.layer.cornerRadius = 5.0 * scale;
-        self.dismissButton.hidden = NO;
+        self.closeButton.frame = CGRectZero;
+        self.closeButton.hidden = YES;
+        self.dismissButton.frame = CGRectZero;
+        self.dismissButton.hidden = YES;
+        self.lyricsLabel.hidden = YES;
 
-        if (!self.isExpanded) {
-            CGFloat y = 21.0 * scale, art = 20.0 * scale;
-            CGFloat contentInset = basePad + PGFrameInset(y, y + art, height, radius);
-            self.artworkView.frame = CGRectMake(contentInset, y, art, art);
-            self.artworkView.layer.cornerRadius = 5.0 * scale;
-            self.artworkFallbackLabel.frame = self.artworkView.frame;
-            CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 6.0 * scale;
-            CGFloat titleWidth = MAX(0.0, width - tx - basePad - close - dismiss - 7.0 * scale);
-            self.titleLabel.frame = CGRectMake(tx, y - 1.0 * scale, titleWidth, 13.0 * scale);
-            self.artistLabel.frame = CGRectMake(tx, y + 10.0 * scale, titleWidth, 11.0 * scale);
-            self.titleLabel.font = [self configuredFontWithSize:9.0 weight:UIFontWeightSemibold];
-            self.artistLabel.font = [self configuredFontWithSize:8.0 weight:UIFontWeightRegular];
-            self.titleLabel.adjustsFontSizeToFitWidth = YES;
-            self.artistLabel.adjustsFontSizeToFitWidth = YES;
-            self.titleLabel.minimumScaleFactor = 0.45;
-            self.artistLabel.minimumScaleFactor = 0.45;
-            self.titleLabel.text = self.compactTrackText.length ? self.compactTrackText : @"未播放";
-            NSString *compactArtist = PGNowPlaying.sharedInstance.artist ?: @"";
-            NSString *compactAlbum = PGNowPlaying.sharedInstance.album ?: @"";
-            self.artistLabel.text = compactArtist.length ? (compactAlbum.length ? [NSString stringWithFormat:@"%@ · %@", compactArtist, compactAlbum] : compactArtist) : compactAlbum;
-            self.artistLabel.hidden = self.artistLabel.text.length == 0;
-            self.artworkView.hidden = NO;
-            self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
-            self.titleLabel.hidden = NO;
-            self.artistLabel.hidden = NO;
-            self.lyricsLabel.hidden = YES;
-            self.progressSlider.hidden = YES;
-            self.progressSlider.frame = CGRectZero;
-            self.elapsedLabel.hidden = YES;
-            self.durationLabel.hidden = YES;
-            self.previousButton.hidden = YES;
-            self.playPauseButton.hidden = YES;
-            self.nextButton.hidden = YES;
-            self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.62) weight:UIFontWeightLight];
-            [self bringSubviewToFront:self.closeButton];
-            [self bringSubviewToFront:self.dismissButton];
-            return;
-        }
-
-        CGFloat art = MIN(38.0 * scale, MAX(30.0, height - 44.0 * scale));
-        CGFloat contentY = 29.0 * scale;
-        CGFloat contentInset = basePad + PGFrameInset(contentY, contentY + art, height, radius);
-        self.artworkView.frame = CGRectMake(contentInset, contentY, art, art);
-        self.artworkView.layer.cornerRadius = 7.0 * scale;
+        // Row two: centered album artwork and track/artist information.
+        CGFloat albumY = 37.0 * scale;
+        CGFloat art = MIN(42.0 * scale, height - albumY - 12.0 * scale);
+        CGFloat albumInset = pad + PGFrameInset(albumY, albumY + art, height, radius);
+        CGFloat albumTextW = MAX(0.0, width - albumInset * 2.0 - art - 10.0 * scale);
+        CGFloat albumGroupW = art + 10.0 * scale + albumTextW;
+        CGFloat albumX = (width - albumGroupW) * 0.5;
+        self.artworkView.frame = CGRectMake(albumX, albumY, art, art);
+        self.artworkView.layer.cornerRadius = 8.0 * scale;
         self.artworkFallbackLabel.frame = self.artworkView.frame;
-        self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.62) weight:UIFontWeightLight];
-        CGFloat tx = CGRectGetMaxX(self.artworkView.frame) + 8.0 * scale;
-        CGFloat controlsWidth = MIN(112.0 * scale, width * 0.30);
-        CGFloat controlsX = width - basePad - controlsWidth;
-        CGFloat textW = MAX(48.0, controlsX - tx - 8.0 * scale);
-        self.titleLabel.frame = CGRectMake(tx, contentY - 1.0 * scale, textW, 16.0 * scale);
-        self.artistLabel.frame = CGRectMake(tx, contentY + 15.0 * scale, textW, 14.0 * scale);
-        self.lyricsLabel.frame = CGRectMake(tx, contentY + 28.0 * scale, textW, 14.0 * scale);
-        self.titleLabel.font = [self configuredFontWithSize:12.0 weight:UIFontWeightSemibold];
-        self.artistLabel.font = [self configuredFontWithSize:9.0 weight:UIFontWeightRegular];
-        self.lyricsLabel.font = [self configuredFontWithSize:9.0 weight:UIFontWeightRegular];
+        self.artworkFallbackLabel.font = [UIFont systemFontOfSize:MAX(8.0, art * 0.55) weight:UIFontWeightLight];
         self.artworkView.hidden = NO;
         self.artworkFallbackLabel.hidden = (self.artworkView.image != nil);
+        CGFloat textX = CGRectGetMaxX(self.artworkView.frame) + 10.0 * scale;
+        CGFloat lineH = 18.0 * scale;
+        CGFloat textY = albumY + MAX(0.0, (art - lineH * 2.0) * 0.5);
+        self.titleLabel.frame = CGRectMake(textX, textY, albumTextW, lineH);
+        self.artistLabel.frame = CGRectMake(textX, textY + lineH, albumTextW, lineH);
+        self.titleLabel.font = [self configuredFontWithSize:12.0 weight:UIFontWeightSemibold];
+        self.artistLabel.font = [self configuredFontWithSize:10.0 weight:UIFontWeightRegular];
+        self.titleLabel.textAlignment = NSTextAlignmentCenter;
+        self.artistLabel.textAlignment = NSTextAlignmentCenter;
+        self.titleLabel.adjustsFontSizeToFitWidth = YES;
+        self.artistLabel.adjustsFontSizeToFitWidth = YES;
+        self.titleLabel.minimumScaleFactor = 0.70;
+        self.artistLabel.minimumScaleFactor = 0.70;
+        self.titleLabel.text = self.compactTrackText.length ? self.compactTrackText : @"未播放";
+        NSString *artist = PGNowPlaying.sharedInstance.artist ?: @"";
+        NSString *album = PGNowPlaying.sharedInstance.album ?: @"";
+        self.artistLabel.text = artist.length ? (album.length ? [NSString stringWithFormat:@"%@ · %@", artist, album] : artist) : (album.length ? album : @"暂无专辑信息");
         self.titleLabel.hidden = NO;
         self.artistLabel.hidden = NO;
-        self.lyricsLabel.hidden = NO;
 
-        CGFloat buttonSize = 28.0 * scale;
-        CGFloat gap = 5.0 * scale;
-        CGFloat buttonY = contentY + 5.0 * scale;
-        CGFloat buttonStart = width - basePad - (buttonSize * 3.0 + gap * 2.0);
-        self.previousButton.frame = CGRectMake(buttonStart, buttonY, buttonSize, buttonSize);
-        self.playPauseButton.frame = CGRectMake(buttonStart + buttonSize + gap, buttonY, buttonSize, buttonSize);
-        self.nextButton.frame = CGRectMake(buttonStart + (buttonSize + gap) * 2.0, buttonY, buttonSize, buttonSize);
-        self.previousButton.hidden = NO;
-        self.playPauseButton.hidden = NO;
-        self.nextButton.hidden = NO;
-
-        if (PGNowPlaying.sharedInstance.canSeek) {
-            CGFloat sliderY = height - 21.0 * scale;
-            CGFloat sliderH = 15.0 * scale;
-            CGFloat sliderInset = PGFrameInset(sliderY, sliderY + sliderH, height, radius);
-            CGFloat sliderX = contentInset;
-            CGFloat sliderW = MAX(40.0, width - sliderX - sliderInset);
-            self.progressSlider.frame = CGRectMake(sliderX, sliderY, sliderW, sliderH);
-            self.elapsedLabel.frame = CGRectMake(sliderX, sliderY + 12.0 * scale, 42.0 * scale, 12.0 * scale);
-            self.durationLabel.frame = CGRectMake(sliderX, sliderY + 12.0 * scale, sliderW, 12.0 * scale);
-            self.elapsedLabel.font = [self configuredFontWithSize:8.0 weight:UIFontWeightRegular];
-            self.durationLabel.font = [self configuredFontWithSize:8.0 weight:UIFontWeightRegular];
-            self.elapsedLabel.hidden = NO;
-            self.durationLabel.hidden = NO;
-            self.progressSlider.hidden = NO;
+        self.progressSlider.hidden = !self.isExpanded;
+        self.elapsedLabel.hidden = !self.isExpanded;
+        self.durationLabel.hidden = !self.isExpanded;
+        self.previousButton.hidden = !self.isExpanded;
+        self.playPauseButton.hidden = !self.isExpanded;
+        self.nextButton.hidden = !self.isExpanded;
+        if (self.isExpanded) {
+            // Row three: seek bar and time labels.
+            CGFloat progressY = albumY + art + 7.0 * scale;
+            CGFloat sliderH = 17.0 * scale;
+            CGFloat progressInset = pad + PGFrameInset(progressY, progressY + sliderH, height, radius);
+            CGFloat sliderX = progressInset;
+            CGFloat sliderW = MAX(0.0, width - progressInset * 2.0);
+            self.progressSlider.frame = CGRectMake(sliderX, progressY, sliderW, sliderH);
+            CGFloat timeY = progressY + sliderH;
+            self.elapsedLabel.frame = CGRectMake(sliderX, timeY, sliderW * 0.5, 13.0 * scale);
+            self.durationLabel.frame = CGRectMake(sliderX + sliderW * 0.5, timeY, sliderW * 0.5, 13.0 * scale);
+            self.elapsedLabel.textAlignment = NSTextAlignmentLeft;
+            self.durationLabel.textAlignment = NSTextAlignmentRight;
+            // Row four: transport controls centered as one group.
+            CGFloat buttonSize = 34.0 * scale;
+            CGFloat buttonGap = 30.0 * scale;
+            CGFloat controlsW = buttonSize * 3.0 + buttonGap * 2.0;
+            CGFloat controlsX = (width - controlsW) * 0.5;
+            CGFloat controlsY = height - buttonSize - 10.0 * scale;
+            self.previousButton.frame = CGRectMake(controlsX, controlsY, buttonSize, buttonSize);
+            self.playPauseButton.frame = CGRectMake(controlsX + buttonSize + buttonGap, controlsY, buttonSize, buttonSize);
+            self.nextButton.frame = CGRectMake(controlsX + (buttonSize + buttonGap) * 2.0, controlsY, buttonSize, buttonSize);
         } else {
             self.progressSlider.frame = CGRectZero;
-            self.progressSlider.hidden = YES;
-            self.elapsedLabel.hidden = YES;
-            self.durationLabel.hidden = YES;
+            self.elapsedLabel.frame = CGRectZero;
+            self.durationLabel.frame = CGRectZero;
+            self.previousButton.frame = CGRectZero;
+            self.playPauseButton.frame = CGRectZero;
+            self.nextButton.frame = CGRectZero;
         }
-        [self bringSubviewToFront:self.closeButton];
-        [self bringSubviewToFront:self.dismissButton];
         return;
     }
 
@@ -917,17 +884,17 @@ static NSString *PGTimedLyricAtTime(NSString *lrc, double seconds) {
     NSDateFormatter *formatter = [NSDateFormatter new];
     formatter.locale = NSLocale.currentLocale;
     formatter.dateFormat = PerfectGrabberPreferences.sharedPreferences.disable24Hour ? @"h:mm a" : @"HH:mm";
-    self.timeLabel.text = [formatter stringFromDate:NSDate.date] ?: @"--:--";
+    self.timeLabel.attributedText = PGStatusItem(@"clock", @"◷", [formatter stringFromDate:NSDate.date] ?: @"--:--");
 
     PerfectGrabberPreferences *preferences = PerfectGrabberPreferences.sharedPreferences;
     self.vibrationFeedbackEnabled = preferences.vibrationFeedback;
-    NSString *batteryIcon = (preferences.chargingIcon && [self isCharging]) ? @"⚡" : @"▰";
-    self.batteryLabel.text = [NSString stringWithFormat:@"%@ %ld%%", batteryIcon, (long)[self currentBatteryPercentage]];
+    NSString *batteryValue = [NSString stringWithFormat:@"%ld%%", (long)[self currentBatteryPercentage]];
+    self.batteryLabel.attributedText = PGStatusItem((preferences.chargingIcon && [self isCharging]) ? @"bolt.fill" : @"battery.75percent", @"▣", batteryValue);
 
     double temperature = PGBatteryTemperatureCelsius();
-    self.temperatureLabel.text = isfinite(temperature) ? [NSString stringWithFormat:@"T %.0f°", temperature] : @"T —";
+    self.temperatureLabel.attributedText = PGStatusItem(@"thermometer.medium", @"♨", isfinite(temperature) ? [NSString stringWithFormat:@"%.0f°", temperature] : @"—");
     double cpu = PGCPUUsagePercent();
-    self.cpuLabel.text = isfinite(cpu) ? [NSString stringWithFormat:@"CPU %.0f%%", cpu] : @"CPU —";
+    self.cpuLabel.attributedText = PGStatusItem(@"cpu", @"▤", isfinite(cpu) ? [NSString stringWithFormat:@"%.0f%%", cpu] : @"—");
 
     NSString *title = nowPlaying.title;
     NSString *artist = nowPlaying.artist;
