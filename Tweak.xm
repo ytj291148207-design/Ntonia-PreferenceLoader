@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <math.h>
 #import "PGGrabberOverlayView.h"
 #import "PGNowPlaying.h"
@@ -256,11 +257,14 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
     }
     self.card.hidden = NO;
     self.container.hidden = NO;
-    if (self.outsideTapView) self.outsideTapView.hidden = !self.isOverlayActive;
     if (self.overlayWindow) {
         self.overlayWindow.hidden = NO;
         self.overlayWindow.cardContainer = self.container;
         self.overlayWindow.outsideTapView = self.outsideTapView;
+        UIView *rootView = self.overlayWindow.rootViewController.view;
+        self.outsideTapView.frame = rootView.bounds;
+        self.outsideTapView.hidden = !self.isOverlayActive;
+        [rootView bringSubviewToFront:self.outsideTapView];
     }
     if (self.panelParent) {
         self.container.frame = self.panelParent.bounds;
@@ -295,11 +299,21 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         // manually guessed rotation; this preserves the correct anchor and axes.
         CGFloat cardWidth = MIN(frame.size.width, screen.width - 24.0);
         CGFloat cardHeight = MIN(frame.size.height, screen.height - 24.0);
-        CGFloat top = MAX(12.0, hostWindow.safeAreaInsets.top + 8.0);
+        // Do not use the portrait auxiliary window's notch inset here: it
+        // pushes the landscape card far down and sideways from the reference.
+        CGFloat top = 8.0;
         CGPoint screenCenter = CGPointMake(screen.width * 0.5, top + cardHeight * 0.5);
         CGPoint screenX = CGPointMake(screenCenter.x + 1.0, screenCenter.y);
-        CGPoint windowCenter = [hostWindow convertPoint:screenCenter fromWindow:nil];
-        CGPoint windowX = [hostWindow convertPoint:screenX fromWindow:nil];
+        id screenSpace = UIScreen.mainScreen.coordinateSpace;
+        SEL conversionSelector = NSSelectorFromString(@"convertPoint:toCoordinateSpace:");
+        if (![screenSpace respondsToSelector:conversionSelector]) {
+            self.card.transform = CGAffineTransformIdentity;
+            self.card.frame = frame;
+            return;
+        }
+        CGPoint (*convertPoint)(id, SEL, CGPoint, id) = (CGPoint (*)(id, SEL, CGPoint, id))objc_msgSend;
+        CGPoint windowCenter = convertPoint(screenSpace, conversionSelector, screenCenter, hostWindow);
+        CGPoint windowX = convertPoint(screenSpace, conversionSelector, screenX, hostWindow);
         CGPoint localCenter = [host convertPoint:windowCenter fromView:hostWindow];
         CGPoint localX = [host convertPoint:windowX fromView:hostWindow];
         CGFloat angle = atan2(localX.y - localCenter.y, localX.x - localCenter.x);
@@ -596,7 +610,9 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         CGFloat overlayWidth = CGRectGetWidth(self.overlayWindow.bounds);
         CGFloat overlayHeight = CGRectGetHeight(self.overlayWindow.bounds);
         BOOL landscape = [self isLandscapeForWindow:self.overlayWindow];
-        CGFloat width = MIN(frame.size.width, MAX(1.0, overlayWidth - 16.0));
+        CGFloat landscapeWidth = UIScreen.mainScreen.coordinateSpace.bounds.size.width;
+        CGFloat widthLimit = landscape ? MAX(1.0, landscapeWidth - 24.0) : MAX(1.0, overlayWidth - 16.0);
+        CGFloat width = MIN(frame.size.width, widthLimit);
         CGFloat safeTop = self.overlayWindow.safeAreaInsets.top;
         CGFloat y = landscape ? MAX(12.0, safeTop + 8.0) : MAX(58.0, anchor.y + 10.0);
         CGFloat cardHeight = MIN(frame.size.height, MAX(1.0, overlayHeight - y - 12.0));
@@ -618,7 +634,9 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
         CGFloat overlayWidth = CGRectGetWidth(self.overlayWindow.bounds);
         CGFloat overlayHeight = CGRectGetHeight(self.overlayWindow.bounds);
         BOOL landscape = [self isLandscapeForWindow:self.overlayWindow];
-        CGFloat width = MIN(frame.size.width, MAX(1.0, overlayWidth - 16.0));
+        CGFloat landscapeWidth = UIScreen.mainScreen.coordinateSpace.bounds.size.width;
+        CGFloat widthLimit = landscape ? MAX(1.0, landscapeWidth - 24.0) : MAX(1.0, overlayWidth - 16.0);
+        CGFloat width = MIN(frame.size.width, widthLimit);
         CGFloat y = landscape ? MAX(12.0, self.overlayWindow.safeAreaInsets.top + 8.0)
                               : MAX(anchor.y + 2.0, 8.0);
         CGFloat cardHeight = MIN(height, MAX(1.0, overlayHeight - y - 12.0));
@@ -757,8 +775,11 @@ static BOOL PGIsTopEdgeGrabber(id grabber) {
 
 - (void)hide {
     [self.orientationVisibilityTimer invalidate];self.orientationVisibilityTimer=nil;self.isLandscapeVisible=NO;
+    self.outsideTapView.hidden = YES;
+    self.outsideTapView.onOutsideTap = nil;
     if (self.overlayWindow) {
         self.overlayWindow.cardContainer = nil;
+        self.overlayWindow.outsideTapView = nil;
         self.overlayWindow.hidden = YES;
         self.overlayWindow = nil;
     }

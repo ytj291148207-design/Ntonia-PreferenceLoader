@@ -232,6 +232,16 @@ static NSAttributedString *PGStatusItem(NSString *symbol, NSString *fallback, NS
     _progressSlider.minimumTrackTintColor=UIColor.whiteColor;
     _progressSlider.maximumTrackTintColor=[UIColor colorWithWhite:1 alpha:0.3];
     _progressSlider.thumbTintColor=UIColor.whiteColor; _progressSlider.hidden=YES;
+    if (@available(iOS 13.0, *)) {
+        UIGraphicsImageRenderer *thumbRenderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(12.0, 12.0)];
+        UIImage *smallThumb = [thumbRenderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+            CGRect circle = CGRectMake(1.0, 1.0, 10.0, 10.0);
+            [[UIColor.whiteColor colorWithAlphaComponent:0.96] setFill];
+            [[UIBezierPath bezierPathWithOvalInRect:circle] fill];
+        }];
+        [_progressSlider setThumbImage:smallThumb forState:UIControlStateNormal];
+        [_progressSlider setThumbImage:smallThumb forState:UIControlStateHighlighted];
+    }
     [_progressSlider addTarget:self action:@selector(progressBegan:) forControlEvents:UIControlEventTouchDown];
     [_progressSlider addTarget:self action:@selector(progressChanged:) forControlEvents:UIControlEventValueChanged];
     [_progressSlider addTarget:self action:@selector(progressEnded:) forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
